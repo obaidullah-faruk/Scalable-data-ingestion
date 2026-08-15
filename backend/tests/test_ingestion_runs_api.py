@@ -1,5 +1,7 @@
 import uuid
 from collections.abc import Generator
+from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -13,7 +15,16 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db_session
 from app.integrations.s3 import get_s3_client, get_s3_presign_client
 from app.main import create_app
-from app.models import Base, IngestionRun, RunStatus, RunTask, RunTaskType
+from app.models import (
+    Base,
+    GdpSeriesSummary,
+    IngestionRun,
+    RunStatus,
+    RunTask,
+    RunTaskStatus,
+    RunTaskType,
+    RunValidationProfile,
+)
 from app.services import task_dispatch
 
 
@@ -307,3 +318,85 @@ def test_confirmation_rejects_wrong_object_size(api_context) -> None:
 
     assert response.status_code == 409
     assert "expected 1" in response.json()["detail"]
+
+
+def test_run_snapshot_and_terminal_sse_are_durable(api_context) -> None:
+    client, _, testing_session = api_context
+    run_id = uuid.uuid4()
+    with testing_session() as session:
+        run = IngestionRun(
+            id=run_id,
+            status=RunStatus.SUCCEEDED,
+            original_filename="gdp.csv",
+            s3_key=f"uploads/{run_id}/source.csv",
+            size_bytes=100,
+            uploaded_bytes=100,
+            processing_progress_percent=100,
+            completed_task_count=3,
+            total_task_count=3,
+        )
+        session.add(run)
+        session.add_all(
+            [
+                RunTask(
+                    ingestion_run_id=run_id,
+                    task_type=task_type,
+                    status=RunTaskStatus.SUCCEEDED,
+                    progress_percent=100,
+                    processed_rows=10,
+                    celery_task_id=f"celery-{index}",
+                )
+                for index, task_type in enumerate(RunTaskType, start=1)
+            ]
+        )
+        session.add(
+            RunValidationProfile(
+                ingestion_run_id=run_id,
+                row_count=10,
+                missing_data_value_count=1,
+                findings={"header": {"valid": True}},
+            )
+        )
+        session.add(
+            GdpSeriesSummary(
+                ingestion_run_id=run_id,
+                series_reference="GDP",
+                units="Dollars",
+                valid_observation_count=10,
+                first_period=date(2020, 3, 1),
+                first_value=Decimal("100"),
+                latest_period=date(2020, 6, 1),
+                latest_value=Decimal("105"),
+                min_value=Decimal("100"),
+                max_value=Decimal("105"),
+                quarter_to_quarter_change=Decimal("5"),
+            )
+        )
+        session.commit()
+
+    snapshot = client.get(f"/api/v1/ingestion-runs/{run_id}")
+    events = client.get(f"/api/v1/ingestion-runs/{run_id}/events")
+
+    assert snapshot.status_code == 200
+    body = snapshot.json()
+    assert body["status"] == "SUCCEEDED"
+    assert len(body["tasks"]) == 3
+    assert body["validation_profile"]["row_count"] == 10
+    assert body["series_summaries"] == [
+        {
+            "series_reference": "GDP",
+            "units": "Dollars",
+            "valid_observation_count": 10,
+            "first_period": "2020-03-01",
+            "first_value": "100.00000000",
+            "latest_period": "2020-06-01",
+            "latest_value": "105.00000000",
+            "min_value": "100.00000000",
+            "max_value": "105.00000000",
+            "quarter_to_quarter_change": "5.00000000",
+        }
+    ]
+    assert events.status_code == 200
+    assert events.headers["content-type"].startswith("text/event-stream")
+    assert "event: snapshot" in events.text
+    assert '"status": "SUCCEEDED"' in events.text

@@ -24,6 +24,16 @@ def get_progress_publisher() -> redis.Redis:
     )
 
 
+def get_progress_subscriber() -> redis.Redis:
+    """Create a dedicated connection for one SSE subscription."""
+    return redis.Redis.from_url(
+        get_settings().redis_url,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=20,
+    )
+
+
 def publish_progress_event(event: dict[str, Any]) -> None:
     """Publish without invalidating the durable database checkpoint on failure."""
     try:

@@ -4,6 +4,8 @@ A local CSV ingestion project using React with Material UI, FastAPI, PostgreSQL,
 
 The current implementation creates a durable ingestion run, splits a CSV into 8 MiB parts in the browser, uploads up to three parts concurrently, and finalizes the multipart upload directly with Floci. FastAPI receives metadata and ETags only; it never receives CSV bytes.
 
+![Scalable Data Ingestion screenshot](sample.png)
+
 ## Run locally
 
 Start the backend services:
@@ -70,4 +72,6 @@ alembic upgrade head
 - `POST /api/v1/ingestion-runs/{run_id}/part-urls` — issue a bounded set of presigned part URLs.
 - `POST /api/v1/ingestion-runs/{run_id}/completion-request` — validate the ordered ETag manifest and sign the S3 completion request.
 - `POST /api/v1/ingestion-runs/{run_id}/confirm-upload` — verify the finalized object, create the three durable processing tasks, and queue them in Celery.
+- `GET /api/v1/ingestion-runs/{run_id}` — retrieve the durable processing snapshot and result summaries.
+- `GET /api/v1/ingestion-runs/{run_id}/events` — receive the snapshot first, then live committed processing progress over SSE.
 - `POST /api/v1/ingestion-runs/{run_id}/abort` — discard an unfinished multipart upload.

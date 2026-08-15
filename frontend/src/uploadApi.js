@@ -104,3 +104,11 @@ export function confirmMultipartUpload(runId, objectEtag, objectVersionId) {
     }),
   });
 }
+
+export function getIngestionRun(runId) {
+  return apiRequest(`/api/v1/ingestion-runs/${runId}`);
+}
+
+export function ingestionRunEventsUrl(runId) {
+  return `${API_BASE_URL}/api/v1/ingestion-runs/${runId}/events`;
+}

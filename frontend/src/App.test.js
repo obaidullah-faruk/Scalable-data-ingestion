@@ -3,6 +3,82 @@ import App from './App';
 
 afterEach(() => {
   jest.restoreAllMocks();
+  localStorage.clear();
+});
+
+test('recovers a durable processing snapshot after a page refresh', async () => {
+  localStorage.setItem('ingestion-run-ids', JSON.stringify(['durable-run']));
+  const snapshot = {
+    run_id: 'durable-run',
+    status: 'PROCESSING',
+    original_filename: 'durable.csv',
+    size_bytes: 100,
+    uploaded_bytes: 100,
+    processing_progress_percent: 40,
+    completed_task_count: 1,
+    total_task_count: 3,
+    error_details: null,
+    upload_confirmed_at: null,
+    processing_started_at: null,
+    completed_at: null,
+    tasks: [
+      {
+        task_id: 'task-a',
+        task_type: 'VALIDATE_PROFILE',
+        status: 'SUCCEEDED',
+        progress_percent: 100,
+        processed_rows: 20,
+        retry_count: 0,
+        celery_task_id: 'celery-a',
+        error_details: null,
+        started_at: null,
+        completed_at: null,
+      },
+      {
+        task_id: 'task-b',
+        task_type: 'LOAD_OBSERVATIONS',
+        status: 'PROCESSING',
+        progress_percent: 20,
+        processed_rows: 4,
+        retry_count: 0,
+        celery_task_id: 'celery-b',
+        error_details: null,
+        started_at: null,
+        completed_at: null,
+      },
+    ],
+    validation_profile: {
+      row_count: 20,
+      missing_data_value_count: 1,
+      invalid_period_count: 0,
+      invalid_data_value_count: 0,
+      invalid_status_count: 0,
+      invalid_units_count: 0,
+      findings: {},
+    },
+    series_summaries: [],
+  };
+  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+    ok: true,
+    json: async () => snapshot,
+  });
+  const originalEventSource = global.EventSource;
+  global.EventSource = class {
+    addEventListener() {}
+    close() {}
+  };
+
+  render(<App />);
+
+  expect(await screen.findByText('durable.csv')).toBeInTheDocument();
+  expect(screen.getByText('Processing progress')).toBeInTheDocument();
+  expect(screen.getByText('40%')).toBeInTheDocument();
+  expect(screen.getByText(/20 rows .* 1 missing values/i)).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    'http://localhost:8000/api/v1/ingestion-runs/durable-run',
+    undefined,
+  );
+  global.EventSource = originalEventSource;
 });
 
 test('validates that the selected file is a CSV', () => {

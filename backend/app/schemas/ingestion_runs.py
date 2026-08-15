@@ -1,4 +1,6 @@
 import uuid
+from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -128,3 +130,57 @@ class ConfirmUploadResponse(BaseModel):
     object_etag: str
     object_version_id: str | None
     tasks: list[RunTaskResponse]
+
+
+class RunTaskSnapshotResponse(BaseModel):
+    task_id: uuid.UUID
+    task_type: RunTaskType
+    status: RunTaskStatus
+    progress_percent: int
+    processed_rows: int
+    retry_count: int
+    celery_task_id: str | None
+    error_details: dict | None
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
+class ValidationProfileResponse(BaseModel):
+    row_count: int
+    missing_data_value_count: int
+    invalid_period_count: int
+    invalid_data_value_count: int
+    invalid_status_count: int
+    invalid_units_count: int
+    findings: dict
+
+
+class SeriesSummaryResponse(BaseModel):
+    series_reference: str
+    units: str | None
+    valid_observation_count: int
+    first_period: str | None
+    first_value: Decimal | None
+    latest_period: str | None
+    latest_value: Decimal | None
+    min_value: Decimal | None
+    max_value: Decimal | None
+    quarter_to_quarter_change: Decimal | None
+
+
+class IngestionRunSnapshotResponse(BaseModel):
+    run_id: uuid.UUID
+    status: RunStatus
+    original_filename: str
+    size_bytes: int
+    uploaded_bytes: int
+    processing_progress_percent: int
+    completed_task_count: int
+    total_task_count: int
+    error_details: dict | None
+    upload_confirmed_at: datetime | None
+    processing_started_at: datetime | None
+    completed_at: datetime | None
+    tasks: list[RunTaskSnapshotResponse]
+    validation_profile: ValidationProfileResponse | None
+    series_summaries: list[SeriesSummaryResponse]

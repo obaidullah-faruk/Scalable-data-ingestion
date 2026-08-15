@@ -1,8 +1,12 @@
+import json
 import uuid
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -19,6 +23,7 @@ from app.schemas.ingestion_runs import (
     PartUrlsResponse,
     PresignedPartUrl,
     SignedCompletionRequest,
+    IngestionRunSnapshotResponse,
 )
 from app.services.multipart_uploads import (
     CompletionPart,
@@ -35,6 +40,8 @@ from app.services.multipart_uploads import (
     start_multipart_upload,
 )
 from app.services.task_dispatch import dispatch_queued_tasks
+from app.services.progress_events import PROGRESS_CHANNEL, get_progress_subscriber
+from app.services.run_snapshots import get_run_snapshot, is_terminal_run_status
 
 router = APIRouter(prefix="/api/v1/ingestion-runs", tags=["ingestion-runs"])
 
@@ -48,6 +55,86 @@ def s3_unavailable_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail="Local object storage request failed",
+    )
+
+
+def sse_message(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def run_event_stream(
+    run_id: uuid.UUID, initial_snapshot: IngestionRunSnapshotResponse
+) -> Iterator[str]:
+    """Yield a durable snapshot first, then matching Redis progress events."""
+    snapshot_data = initial_snapshot.model_dump(mode="json")
+    yield sse_message("snapshot", snapshot_data)
+    if is_terminal_run_status(initial_snapshot.status.value):
+        return
+
+    redis_client = get_progress_subscriber()
+    pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
+    try:
+        pubsub.subscribe(PROGRESS_CHANNEL)
+        while True:
+            message = pubsub.get_message(timeout=15)
+            if message is None:
+                yield ": keepalive\n\n"
+                continue
+            if message.get("type") != "message":
+                continue
+            try:
+                progress = json.loads(message["data"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if progress.get("run_id") != str(run_id):
+                continue
+            yield sse_message("progress", progress)
+            if is_terminal_run_status(str(progress.get("run_status", ""))):
+                return
+    except RedisError:
+        # Closing the stream makes EventSource reconnect; the client fetches a
+        # fresh PostgreSQL snapshot in its next onopen callback.
+        return
+    finally:
+        try:
+            pubsub.close()
+            redis_client.close()
+        except RedisError:
+            pass
+
+
+@router.get("/{run_id}", response_model=IngestionRunSnapshotResponse)
+def get_ingestion_run(
+    run_id: uuid.UUID,
+    session: DatabaseSession,
+) -> IngestionRunSnapshotResponse:
+    snapshot = get_run_snapshot(session, run_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ingestion run not found",
+        )
+    return snapshot
+
+
+@router.get("/{run_id}/events")
+def ingestion_run_events(
+    run_id: uuid.UUID,
+    session: DatabaseSession,
+) -> StreamingResponse:
+    snapshot = get_run_snapshot(session, run_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ingestion run not found",
+        )
+    return StreamingResponse(
+        run_event_stream(run_id, snapshot),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
