@@ -1,0 +1,110 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ingestion}
+      POSTGRES_USER: ${POSTGRES_USER:-ingestion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ingestion}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-ingestion}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ingestion}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:8
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  floci:
+    image: floci/floci:latest
+    ports:
+      - "${FLOCI_PORT:-4566}:4566"
+    volumes:
+      - floci_data:/app/data
+
+  api:
+    build:
+      context: ./backend
+    command: ["python", "health_server.py"]
+    environment:
+      POSTGRES_HOST: ${POSTGRES_CONTAINER_HOST:-postgres}
+      POSTGRES_PORT: "5432"
+      RABBITMQ_HOST: ${RABBITMQ_CONTAINER_HOST:-rabbitmq}
+      RABBITMQ_PORT: "5672"
+      REDIS_HOST: ${REDIS_CONTAINER_HOST:-redis}
+      REDIS_PORT: "6379"
+      FLOCI_ENDPOINT_URL: ${FLOCI_CONTAINER_ENDPOINT_URL:-http://floci:4566}
+      AWS_ACCESS_KEY_ID: ${FLOCI_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${FLOCI_SECRET_ACCESS_KEY:-test}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      floci:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build:
+      context: ./backend
+    command: ["python", "worker.py"]
+    environment:
+      POSTGRES_HOST: ${POSTGRES_CONTAINER_HOST:-postgres}
+      POSTGRES_PORT: "5432"
+      RABBITMQ_HOST: ${RABBITMQ_CONTAINER_HOST:-rabbitmq}
+      RABBITMQ_PORT: "5672"
+      REDIS_HOST: ${REDIS_CONTAINER_HOST:-redis}
+      REDIS_PORT: "6379"
+      FLOCI_ENDPOINT_URL: ${FLOCI_CONTAINER_ENDPOINT_URL:-http://floci:4566}
+      AWS_ACCESS_KEY_ID: ${FLOCI_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${FLOCI_SECRET_ACCESS_KEY:-test}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      floci:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  floci_data:
