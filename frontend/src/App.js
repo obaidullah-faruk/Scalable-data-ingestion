@@ -13,7 +13,10 @@ import {
 } from '@mui/material';
 import {
   abortIngestionRun,
+  completeMultipartUpload,
+  confirmMultipartUpload,
   createIngestionRun,
+  requestMultipartCompletion,
   requestPartUrls,
 } from './uploadApi';
 import {
@@ -53,12 +56,60 @@ function App() {
     });
   };
 
+  const finalizeUpload = async (
+    runId,
+    uploadId,
+    manifest,
+    completedObject = null,
+  ) => {
+    updateUpload(runId, (upload) => ({
+      ...upload,
+      status: 'finalizing',
+      manifest,
+      error: '',
+    }));
+    let object = completedObject;
+    try {
+      if (!object) {
+        const signedRequest = await requestMultipartCompletion(
+          runId,
+          uploadId,
+          manifest,
+        );
+        object = await completeMultipartUpload(signedRequest);
+        updateUpload(runId, (upload) => ({
+          ...upload,
+          completedObject: object,
+        }));
+      }
+      const confirmation = await confirmMultipartUpload(
+        runId,
+        object.objectEtag,
+        object.objectVersionId,
+      );
+      updateUpload(runId, (upload) => ({
+        ...upload,
+        status: confirmation.status === 'QUEUED' ? 'queued' : 'confirmed',
+        completedObject: object,
+        error: '',
+      }));
+    } catch (error) {
+      updateUpload(runId, (upload) => ({
+        ...upload,
+        status: 'finalization_failed',
+        completedObject: object,
+        error: error.message,
+      }));
+    }
+  };
+
   const uploadParts = async (runId, file, run) => {
     const allPartNumbers = Array.from(
       {length: run.total_parts},
       (_, index) => index + 1,
     );
     let allSucceeded = true;
+    const manifest = [];
 
     for (
       let offset = 0;
@@ -102,18 +153,26 @@ function App() {
             onChange: (changes) => updatePart(runId, partNumber, changes),
           }),
       );
-      if (results.some((succeeded) => !succeeded)) {
+      if (results.some((etag) => !etag)) {
         allSucceeded = false;
       }
+      signedParts.forEach(({part_number: partNumber}, index) => {
+        if (results[index]) {
+          manifest.push({part_number: partNumber, etag: results[index]});
+        }
+      });
     }
 
-    updateUpload(runId, (upload) => ({
-      ...upload,
-      status: allSucceeded ? 'parts_uploaded' : 'upload_failed',
-      error: allSucceeded
-        ? ''
-        : 'Some parts failed. Retry them individually or abort the upload.',
-    }));
+    if (allSucceeded) {
+      manifest.sort((left, right) => left.part_number - right.part_number);
+      void finalizeUpload(runId, run.upload_id, manifest);
+    } else {
+      updateUpload(runId, (upload) => ({
+        ...upload,
+        status: 'upload_failed',
+        error: 'Some parts failed. Retry them individually or abort the upload.',
+      }));
+    }
   };
 
   const selectFile = (event) => {
@@ -139,6 +198,7 @@ function App() {
         ...current,
         [run.run_id]: {
           runId: run.run_id,
+          uploadId: run.upload_id,
           filename: selectedFile.name,
           file: selectedFile,
           size: selectedFile.size,
@@ -170,24 +230,32 @@ function App() {
     try {
       const response = await requestPartUrls(upload.partUrlsEndpoint, [partNumber]);
       const signedPart = response.parts[0];
-      const succeeded = await uploadPart({
+      const etag = await uploadPart({
         file: upload.file,
         partNumber,
         partSize: upload.partSize,
         url: signedPart.url,
         onChange: (changes) => updatePart(upload.runId, partNumber, changes),
       });
-      if (succeeded) {
-        updateUpload(upload.runId, (current) => {
-          const finished = Object.values(current.parts).every(
-            (part) => part.status === 'succeeded',
-          );
-          return {
-            ...current,
-            status: finished ? 'parts_uploaded' : 'upload_failed',
-            error: finished ? '' : current.error,
-          };
-        });
+      if (etag) {
+        const updatedParts = {
+          ...upload.parts,
+          [partNumber]: {
+            ...upload.parts[partNumber],
+            status: 'succeeded',
+            etag,
+            error: '',
+          },
+        };
+        const finished = Object.values(updatedParts).every(
+          (part) => part.status === 'succeeded',
+        );
+        if (finished) {
+          const manifest = Object.values(updatedParts)
+            .sort((left, right) => left.number - right.number)
+            .map((part) => ({part_number: part.number, etag: part.etag}));
+          void finalizeUpload(upload.runId, upload.uploadId, manifest);
+        }
       }
     } catch (retryError) {
       updatePart(upload.runId, partNumber, {
@@ -216,6 +284,15 @@ function App() {
         error: error.message,
       }));
     }
+  };
+
+  const retryFinalization = (upload) => {
+    void finalizeUpload(
+      upload.runId,
+      upload.uploadId,
+      upload.manifest,
+      upload.completedObject,
+    );
   };
 
   const uploadEntries = Object.values(uploads).reverse();
@@ -371,9 +448,9 @@ function App() {
               const completedParts = Object.values(upload.parts).filter(
                 (part) => part.status === 'succeeded',
               ).length;
-              const statusColor = upload.status === 'parts_uploaded'
+              const statusColor = ['confirmed', 'queued'].includes(upload.status)
                 ? 'success'
-                : ['upload_failed', 'aborted'].includes(upload.status)
+                : ['upload_failed', 'finalization_failed', 'aborted'].includes(upload.status)
                   ? 'error'
                   : 'default';
 
@@ -428,12 +505,23 @@ function App() {
                     {completedParts} of {Object.keys(upload.parts).length} parts uploaded
                   </Typography>
 
-                  {upload.status === 'parts_uploaded' && (
+                  {['confirmed', 'queued'].includes(upload.status) && (
                     <Alert severity="success" sx={{mt: 2.5}}>
-                      All parts are stored. Final assembly is implemented in Phase 7.
+                      Upload finalized and verified in object storage.
                     </Alert>
                   )}
                   {upload.error && <Alert severity="error" sx={{mt: 2.5}}>{upload.error}</Alert>}
+
+                  {upload.status === 'finalization_failed' && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => retryFinalization(upload)}
+                      sx={{mt: 2.5}}
+                    >
+                      Retry finalization
+                    </Button>
+                  )}
 
                   {failedParts.length > 0 && (
                     <Stack spacing={1} mt={3}>
@@ -465,7 +553,8 @@ function App() {
                     </Stack>
                   )}
 
-                  {!['aborted', 'aborting'].includes(upload.status) && (
+                  {!['aborted', 'aborting', 'confirmed', 'finalizing', 'queued'].includes(upload.status) &&
+                    !upload.completedObject && (
                     <Button
                       size="small"
                       variant="text"

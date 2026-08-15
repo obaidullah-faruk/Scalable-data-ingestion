@@ -66,7 +66,7 @@ def test_bucket_cors_allows_multipart_browser_contract() -> None:
     assert rule["AllowedOrigins"] == ["http://localhost:3000"]
     assert rule["AllowedMethods"] == ["PUT", "POST", "HEAD"]
     assert rule["AllowedHeaders"] == ["*"]
-    assert rule["ExposeHeaders"] == ["ETag"]
+    assert rule["ExposeHeaders"] == ["ETag", "x-amz-version-id"]
 
 
 def test_unexpected_head_bucket_error_is_not_hidden() -> None:

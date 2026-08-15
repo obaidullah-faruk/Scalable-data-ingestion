@@ -12,6 +12,13 @@ ALLOWED_CSV_CONTENT_TYPES = {
 }
 
 
+def validate_etag_value(etag: str) -> str:
+    normalized = etag.strip()
+    if not normalized or any(ord(character) < 32 for character in normalized):
+        raise ValueError("etag must not be blank or contain control characters")
+    return normalized
+
+
 class CreateIngestionRunRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -75,3 +82,42 @@ class PartUrlsResponse(BaseModel):
 class AbortIngestionRunResponse(BaseModel):
     run_id: uuid.UUID
     status: RunStatus
+
+
+class CompletedPart(BaseModel):
+    part_number: int = Field(ge=1, le=10_000)
+    etag: str = Field(min_length=1, max_length=1024)
+
+    @field_validator("etag")
+    @classmethod
+    def validate_etag(cls, etag: str) -> str:
+        return validate_etag_value(etag)
+
+
+class CompletionRequest(BaseModel):
+    upload_id: str = Field(min_length=1, max_length=1024)
+    parts: list[CompletedPart] = Field(min_length=1, max_length=10_000)
+
+
+class SignedCompletionRequest(BaseModel):
+    method: str
+    url: str
+    headers: dict[str, str]
+    body: str
+
+
+class ConfirmUploadRequest(BaseModel):
+    object_etag: str = Field(min_length=1, max_length=1024)
+    object_version_id: str | None = Field(default=None, max_length=1024)
+
+    @field_validator("object_etag")
+    @classmethod
+    def validate_object_etag(cls, object_etag: str) -> str:
+        return validate_etag_value(object_etag)
+
+
+class ConfirmUploadResponse(BaseModel):
+    run_id: uuid.UUID
+    status: RunStatus
+    object_etag: str
+    object_version_id: str | None

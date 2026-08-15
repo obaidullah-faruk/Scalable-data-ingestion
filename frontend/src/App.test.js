@@ -24,6 +24,7 @@ test('uploads CSV bytes only through presigned Floci URLs', async () => {
         ok: true,
         json: async () => ({
           run_id: 'run-1',
+          upload_id: 'upload-1',
           part_size_bytes: 3,
           total_parts: 2,
           part_url_batch_limit: 100,
@@ -42,6 +43,35 @@ test('uploads CSV bytes only through presigned Floci URLs', async () => {
         }),
       });
     }
+    if (url === 'http://localhost:8000/api/v1/ingestion-runs/run-1/completion-request') {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          method: 'POST',
+          url: 'http://localhost:4566/finalize',
+          headers: {'Content-Type': 'application/xml'},
+          body: '<CompleteMultipartUpload />',
+        }),
+      });
+    }
+    if (url === 'http://localhost:4566/finalize') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: async () => (
+          '<CompleteMultipartUploadResult>' +
+          '<ETag>&quot;final-etag&quot;</ETag>' +
+          '</CompleteMultipartUploadResult>'
+        ),
+        headers: {get: () => null},
+      });
+    }
+    if (url === 'http://localhost:8000/api/v1/ingestion-runs/run-1/confirm-upload') {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({status: 'AWAITING_CONFIRMATION'}),
+      });
+    }
     return Promise.resolve({
       ok: true,
       status: 200,
@@ -55,20 +85,44 @@ test('uploads CSV bytes only through presigned Floci URLs', async () => {
   fireEvent.change(input, {target: {files: [file]}});
   fireEvent.click(screen.getByRole('button', {name: /start upload/i}));
 
-  expect(await screen.findByText(/all parts are stored/i)).toBeInTheDocument();
+  expect(await screen.findByText(/upload finalized and verified/i)).toBeInTheDocument();
   const createRequest = JSON.parse(fetchMock.mock.calls[0][1].body);
   expect(createRequest).toEqual({
     filename: 'data.csv',
     content_type: 'text/csv',
     byte_size: 6,
   });
-  const directUploads = fetchMock.mock.calls.filter(([url]) =>
-    url.startsWith('http://localhost:4566/'),
+  const directUploads = fetchMock.mock.calls.filter(([, options]) =>
+    options.method === 'PUT',
   );
   expect(directUploads).toHaveLength(2);
   directUploads.forEach(([, options]) => {
     expect(options.method).toBe('PUT');
     expect(options.body).toBeInstanceOf(Blob);
+  });
+  const completionRequest = JSON.parse(fetchMock.mock.calls.find(
+    ([url]) => url.endsWith('/completion-request'),
+  )[1].body);
+  expect(completionRequest).toEqual({
+    upload_id: 'upload-1',
+    parts: [
+      {part_number: 1, etag: 'etag-value'},
+      {part_number: 2, etag: 'etag-value'},
+    ],
+  });
+  const directCompletion = fetchMock.mock.calls.find(
+    ([url]) => url === 'http://localhost:4566/finalize',
+  );
+  expect(directCompletion[1]).toMatchObject({
+    method: 'POST',
+    body: '<CompleteMultipartUpload />',
+  });
+  const confirmationRequest = JSON.parse(fetchMock.mock.calls.find(
+    ([url]) => url.endsWith('/confirm-upload'),
+  )[1].body);
+  expect(confirmationRequest).toEqual({
+    object_etag: '"final-etag"',
+    object_version_id: null,
   });
   await waitFor(() => expect(screen.getByText('100%')).toBeInTheDocument());
 });

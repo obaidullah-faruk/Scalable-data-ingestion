@@ -53,6 +53,8 @@ class IngestionRun(Base, Timestamped):
     original_filename: Mapped[str] = mapped_column(String(1024), nullable=False)
     s3_key: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
     upload_id: Mapped[str | None] = mapped_column(String(1024), unique=True)
+    object_etag: Mapped[str | None] = mapped_column(String(1024))
+    object_version_id: Mapped[str | None] = mapped_column(String(1024))
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     uploaded_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     processing_progress_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

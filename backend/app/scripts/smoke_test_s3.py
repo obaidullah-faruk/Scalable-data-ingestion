@@ -1,10 +1,13 @@
 import uuid
+from xml.etree import ElementTree
 
 import httpx
+from botocore.exceptions import ClientError
 
 from app.core.config import get_settings
 from app.integrations.s3 import get_s3_client
 from app.integrations.s3_setup import bucket_cors_configuration
+from app.services.multipart_uploads import CompletionPart, sign_completion_request
 
 
 def assert_bucket_cors(s3_client: object, bucket_name: str, origin: str) -> None:
@@ -61,6 +64,93 @@ def smoke_test_browser_etag(
         s3_client.delete_object(Bucket=bucket_name, Key=key)
 
 
+def smoke_test_browser_multipart_completion(
+    s3_client: object,
+    bucket_name: str,
+    origin: str,
+) -> None:
+    key = f"smoke-tests/{uuid.uuid4()}.csv"
+    payload = b"period,value\n2026-01-01,42\n"
+    upload_id = None
+    completed = False
+    try:
+        created = s3_client.create_multipart_upload(
+            Bucket=bucket_name,
+            Key=key,
+            ContentType="text/csv",
+        )
+        upload_id = created["UploadId"]
+        part_url = s3_client.generate_presigned_url(
+            "upload_part",
+            Params={
+                "Bucket": bucket_name,
+                "Key": key,
+                "UploadId": upload_id,
+                "PartNumber": 1,
+            },
+            ExpiresIn=60,
+        )
+        uploaded_part = httpx.put(
+            part_url,
+            content=payload,
+            headers={"Origin": origin},
+        )
+        uploaded_part.raise_for_status()
+        part_etag = uploaded_part.headers["etag"]
+        manifest = [CompletionPart(part_number=1, etag=part_etag)]
+        signed_completion = sign_completion_request(
+            s3_client,
+            bucket_name=bucket_name,
+            object_key=key,
+            upload_id=upload_id,
+            parts=manifest,
+        )
+        preflight = httpx.options(
+            signed_completion.url,
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": ",".join(
+                    header.lower() for header in signed_completion.headers
+                ),
+            },
+        )
+        preflight.raise_for_status()
+        completion = httpx.post(
+            signed_completion.url,
+            content=signed_completion.body,
+            headers={**signed_completion.headers, "Origin": origin},
+        )
+        completion.raise_for_status()
+        root = ElementTree.fromstring(completion.content)
+        completed_etag = next(
+            (
+                element.text
+                for element in root.iter()
+                if element.tag.rsplit("}", 1)[-1] == "ETag"
+            ),
+            None,
+        )
+        assert completed_etag, "The completion response did not contain an object ETag"
+        metadata = s3_client.head_object(Bucket=bucket_name, Key=key)
+        assert metadata["ContentLength"] == len(payload)
+        assert metadata["ETag"] == completed_etag
+        completed = True
+    finally:
+        if completed:
+            s3_client.delete_object(Bucket=bucket_name, Key=key)
+        elif upload_id is not None:
+            try:
+                s3_client.abort_multipart_upload(
+                    Bucket=bucket_name,
+                    Key=key,
+                    UploadId=upload_id,
+                )
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") != "NoSuchUpload":
+                    raise
+
+
 def main() -> None:
     settings = get_settings()
     s3_client = get_s3_client()
@@ -71,7 +161,12 @@ def main() -> None:
         settings.s3_upload_bucket,
         settings.react_origin,
     )
-    print("Floci S3 bucket, object round-trip, and browser ETag checks passed")
+    smoke_test_browser_multipart_completion(
+        s3_client,
+        settings.s3_upload_bucket,
+        settings.react_origin,
+    )
+    print("Floci S3 bucket, browser ETag, and multipart completion checks passed")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ def bucket_cors_configuration(allowed_origin: str) -> dict[str, list[dict[str, A
                 "AllowedOrigins": [allowed_origin],
                 "AllowedMethods": ["PUT", "POST", "HEAD"],
                 "AllowedHeaders": ["*"],
-                "ExposeHeaders": ["ETag"],
+                "ExposeHeaders": ["ETag", "x-amz-version-id"],
                 "MaxAgeSeconds": 3600,
             }
         ]

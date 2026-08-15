@@ -10,18 +10,27 @@ from app.db.session import get_db_session
 from app.integrations.s3 import get_s3_client, get_s3_presign_client
 from app.schemas.ingestion_runs import (
     AbortIngestionRunResponse,
+    CompletionRequest,
+    ConfirmUploadRequest,
+    ConfirmUploadResponse,
     CreateIngestionRunRequest,
     CreateIngestionRunResponse,
     PartUrlsRequest,
     PartUrlsResponse,
     PresignedPartUrl,
+    SignedCompletionRequest,
 )
 from app.services.multipart_uploads import (
+    CompletionPart,
     IngestionRunNotFoundError,
+    InvalidCompletionManifestError,
     InvalidPartNumbersError,
     InvalidUploadStateError,
+    ObjectVerificationError,
     abort_multipart_upload,
+    confirm_completed_upload,
     create_presigned_part_urls,
+    create_signed_completion_request,
     required_part_count,
     start_multipart_upload,
 )
@@ -127,6 +136,88 @@ def create_part_urls(
             PresignedPartUrl(part_number=part.part_number, url=part.url)
             for part in parts
         ],
+    )
+
+
+@router.post(
+    "/{run_id}/completion-request",
+    response_model=SignedCompletionRequest,
+)
+def create_completion_request(
+    run_id: uuid.UUID,
+    request: CompletionRequest,
+    session: DatabaseSession,
+    presign_client: S3PresignClient,
+    settings: AppSettings,
+) -> SignedCompletionRequest:
+    try:
+        completion = create_signed_completion_request(
+            session,
+            presign_client,
+            run_id=run_id,
+            bucket_name=settings.s3_upload_bucket,
+            upload_id=request.upload_id,
+            parts=[
+                CompletionPart(part_number=part.part_number, etag=part.etag)
+                for part in request.parts
+            ],
+            part_size_bytes=settings.upload_part_size_bytes,
+        )
+    except IngestionRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ingestion run not found",
+        ) from exc
+    except InvalidCompletionManifestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    except InvalidUploadStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (BotoCoreError, ClientError) as exc:
+        raise s3_unavailable_error() from exc
+
+    return SignedCompletionRequest(
+        method=completion.method,
+        url=completion.url,
+        headers=completion.headers,
+        body=completion.body,
+    )
+
+
+@router.post("/{run_id}/confirm-upload", response_model=ConfirmUploadResponse)
+def confirm_upload(
+    run_id: uuid.UUID,
+    request: ConfirmUploadRequest,
+    session: DatabaseSession,
+    s3_client: S3Client,
+    settings: AppSettings,
+) -> ConfirmUploadResponse:
+    try:
+        ingestion_run = confirm_completed_upload(
+            session,
+            s3_client,
+            run_id=run_id,
+            bucket_name=settings.s3_upload_bucket,
+            object_etag=request.object_etag,
+            object_version_id=request.object_version_id,
+        )
+    except IngestionRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ingestion run not found",
+        ) from exc
+    except (InvalidUploadStateError, ObjectVerificationError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (BotoCoreError, ClientError) as exc:
+        raise s3_unavailable_error() from exc
+
+    return ConfirmUploadResponse(
+        run_id=ingestion_run.id,
+        status=ingestion_run.status,
+        object_etag=ingestion_run.object_etag,
+        object_version_id=ingestion_run.object_version_id,
     )
 
 

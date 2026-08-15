@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Generator
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 import pytest
@@ -19,6 +20,9 @@ class FakeS3Client:
     def __init__(self) -> None:
         self.uploads: list[dict] = []
         self.aborts: list[dict] = []
+        self.completed_objects: dict[str, dict[str, object]] = {}
+        self.meta = SimpleNamespace(endpoint_url="http://localhost:4566")
+        self._request_signer = FakeRequestSigner()
 
     def create_multipart_upload(self, **arguments: object) -> dict[str, str]:
         self.uploads.append(arguments)
@@ -30,20 +34,31 @@ class FakeS3Client:
         *,
         Params: dict[str, object],
         ExpiresIn: int,
+        HttpMethod: str | None = None,
     ) -> str:
-        query = urlencode(
-            {
-                "uploadId": Params["UploadId"],
-                "partNumber": Params["PartNumber"],
-                "expires": ExpiresIn,
-            }
-        )
+        query_values = {
+            "uploadId": Params["UploadId"],
+            "expires": ExpiresIn,
+        }
+        if operation == "upload_part":
+            query_values["partNumber"] = Params["PartNumber"]
+        query = urlencode(query_values)
         return (
             f"http://localhost:4566/{Params['Bucket']}/{Params['Key']}?{query}"
         )
 
     def abort_multipart_upload(self, **arguments: object) -> None:
         self.aborts.append(arguments)
+
+    def head_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        return self.completed_objects[Key]
+
+
+class FakeRequestSigner:
+    def sign(self, operation_name: str, request: object) -> None:
+        assert operation_name == "CompleteMultipartUpload"
+        request.headers["Authorization"] = "test-signature"
+        request.headers["X-Amz-Date"] = "20260816T000000Z"
 
 
 @pytest.fixture
@@ -173,3 +188,100 @@ def test_abort_is_idempotent_and_marks_run_failed(api_context) -> None:
         run = session.get(IngestionRun, uuid.UUID(run_id))
         assert run.status == RunStatus.FAILED
         assert run.error_details["code"] == "UPLOAD_ABORTED"
+
+
+def test_completion_is_signed_then_verified_with_head_object(api_context) -> None:
+    client, fake_s3, testing_session = api_context
+    run = create_run(client).json()
+    parts = [
+        {"part_number": number, "etag": f'"part-{number}"'}
+        for number in range(1, 4)
+    ]
+
+    completion = client.post(
+        f"/api/v1/ingestion-runs/{run['run_id']}/completion-request",
+        json={"upload_id": run["upload_id"], "parts": parts},
+    )
+
+    assert completion.status_code == 200
+    signed_request = completion.json()
+    assert signed_request["method"] == "POST"
+    assert signed_request["headers"]["Content-Type"] == "application/xml"
+    assert signed_request["headers"]["Authorization"] == "test-signature"
+    assert signed_request["body"].index("part-1") < signed_request["body"].index("part-3")
+    fake_s3.completed_objects[run["object_key"]] = {
+        "ContentLength": 20_000_000,
+        "ETag": '"completed-etag-3"',
+        "VersionId": "version-1",
+    }
+
+    confirmed = client.post(
+        f"/api/v1/ingestion-runs/{run['run_id']}/confirm-upload",
+        json={
+            "object_etag": '"completed-etag-3"',
+            "object_version_id": "version-1",
+        },
+    )
+    repeated = client.post(
+        f"/api/v1/ingestion-runs/{run['run_id']}/confirm-upload",
+        json={
+            "object_etag": '"completed-etag-3"',
+            "object_version_id": "version-1",
+        },
+    )
+    abort_confirmed = client.post(
+        f"/api/v1/ingestion-runs/{run['run_id']}/abort"
+    )
+
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "AWAITING_CONFIRMATION"
+    assert repeated.status_code == 200
+    assert abort_confirmed.status_code == 409
+    with testing_session() as session:
+        persisted = session.get(IngestionRun, uuid.UUID(run["run_id"]))
+        assert persisted.uploaded_bytes == persisted.size_bytes
+        assert persisted.object_etag == '"completed-etag-3"'
+        assert persisted.upload_confirmed_at is not None
+
+
+def test_completion_rejects_missing_or_unordered_parts(api_context) -> None:
+    client, _, _ = api_context
+    run = create_run(client).json()
+
+    response = client.post(
+        f"/api/v1/ingestion-runs/{run['run_id']}/completion-request",
+        json={
+            "upload_id": run["upload_id"],
+            "parts": [
+                {"part_number": 2, "etag": '"part-2"'},
+                {"part_number": 1, "etag": '"part-1"'},
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "ordered" in response.json()["detail"]
+
+
+def test_confirmation_rejects_wrong_object_size(api_context) -> None:
+    client, fake_s3, _ = api_context
+    run = create_run(client, byte_size=1).json()
+    client.post(
+        f"/api/v1/ingestion-runs/{run['run_id']}/completion-request",
+        json={
+            "upload_id": run["upload_id"],
+            "parts": [{"part_number": 1, "etag": '"part-1"'}],
+        },
+    )
+    fake_s3.completed_objects[run["object_key"]] = {
+        "ContentLength": 2,
+        "ETag": '"completed"',
+    }
+
+    response = client.post(
+        f"/api/v1/ingestion-runs/{run['run_id']}/confirm-upload",
+        json={"object_etag": '"completed"'},
+    )
+
+    assert response.status_code == 409
+    assert "expected 1" in response.json()["detail"]

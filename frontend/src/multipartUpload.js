@@ -87,13 +87,13 @@ export async function uploadPart({
       throw new Error('Floci did not expose the part ETag');
     }
     onChange({status: 'succeeded', etag, error: '', url});
-    return true;
+    return etag;
   } catch (error) {
     onChange({
       status: 'failed',
       error: error instanceof Error ? error.message : 'Part upload failed',
       url,
     });
-    return false;
+    return null;
   }
 }

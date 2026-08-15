@@ -4,7 +4,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
+from xml.etree.ElementTree import Element, SubElement, tostring
 
+from botocore.awsrequest import AWSRequest
 from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy.orm import Session
 
@@ -25,14 +28,76 @@ class InvalidPartNumbersError(Exception):
     pass
 
 
+class InvalidCompletionManifestError(Exception):
+    pass
+
+
+class ObjectVerificationError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class PresignedPart:
     part_number: int
     url: str
 
 
+@dataclass(frozen=True)
+class CompletionPart:
+    part_number: int
+    etag: str
+
+
+@dataclass(frozen=True)
+class SignedCompletion:
+    method: str
+    url: str
+    headers: dict[str, str]
+    body: str
+
+
 def required_part_count(byte_size: int, part_size_bytes: int) -> int:
     return math.ceil(byte_size / part_size_bytes)
+
+
+def build_completion_xml(parts: list[CompletionPart]) -> str:
+    root = Element("CompleteMultipartUpload")
+    for completed_part in parts:
+        part = SubElement(root, "Part")
+        SubElement(part, "PartNumber").text = str(completed_part.part_number)
+        SubElement(part, "ETag").text = completed_part.etag
+    return tostring(root, encoding="unicode", short_empty_elements=False)
+
+
+def sign_completion_request(
+    s3_client: Any,
+    *,
+    bucket_name: str,
+    object_key: str,
+    upload_id: str,
+    parts: list[CompletionPart],
+) -> SignedCompletion:
+    body = build_completion_xml(parts)
+    endpoint = s3_client.meta.endpoint_url.rstrip("/")
+    url = (
+        f"{endpoint}/{quote(bucket_name, safe='')}/{quote(object_key, safe='/')}"
+        f"?uploadId={quote(upload_id, safe='')}"
+    )
+    request = AWSRequest(
+        method="POST",
+        url=url,
+        data=body.encode("utf-8"),
+        headers={"Content-Type": "application/xml"},
+    )
+    # A header-based SigV4 signature includes the payload hash, so changing even
+    # one part number or ETag invalidates this completion request.
+    s3_client._request_signer.sign("CompleteMultipartUpload", request)
+    return SignedCompletion(
+        method="POST",
+        url=url,
+        headers=dict(request.headers.items()),
+        body=body,
+    )
 
 
 def start_multipart_upload(
@@ -130,6 +195,119 @@ def create_presigned_part_urls(
     ]
 
 
+def create_signed_completion_request(
+    session: Session,
+    presign_client: Any,
+    *,
+    run_id: uuid.UUID,
+    bucket_name: str,
+    upload_id: str,
+    parts: list[CompletionPart],
+    part_size_bytes: int,
+) -> SignedCompletion:
+    ingestion_run = session.get(IngestionRun, run_id)
+    if ingestion_run is None:
+        raise IngestionRunNotFoundError
+    if ingestion_run.upload_confirmed_at is not None:
+        raise InvalidUploadStateError("upload was already completed and confirmed")
+    if ingestion_run.status not in {
+        RunStatus.UPLOADING,
+        RunStatus.AWAITING_CONFIRMATION,
+    } or not ingestion_run.upload_id:
+        raise InvalidUploadStateError(
+            f"upload cannot be completed while run is {ingestion_run.status.value}"
+        )
+    if upload_id != ingestion_run.upload_id:
+        raise InvalidCompletionManifestError("upload_id does not belong to this run")
+
+    expected_part_count = required_part_count(
+        ingestion_run.size_bytes, part_size_bytes
+    )
+    actual_part_numbers = [part.part_number for part in parts]
+    expected_part_numbers = list(range(1, expected_part_count + 1))
+    if actual_part_numbers != expected_part_numbers:
+        raise InvalidCompletionManifestError(
+            "parts must be ordered and contain every part number exactly once "
+            f"(expected 1 through {expected_part_count})"
+        )
+
+    signed_completion = sign_completion_request(
+        presign_client,
+        bucket_name=bucket_name,
+        object_key=ingestion_run.s3_key,
+        upload_id=ingestion_run.upload_id,
+        parts=parts,
+    )
+
+    ingestion_run.status = RunStatus.AWAITING_CONFIRMATION
+    session.commit()
+    return signed_completion
+
+
+def confirm_completed_upload(
+    session: Session,
+    s3_client: Any,
+    *,
+    run_id: uuid.UUID,
+    bucket_name: str,
+    object_etag: str,
+    object_version_id: str | None,
+) -> IngestionRun:
+    ingestion_run = session.get(IngestionRun, run_id)
+    if ingestion_run is None:
+        raise IngestionRunNotFoundError
+    if ingestion_run.upload_confirmed_at is not None:
+        if (
+            ingestion_run.object_etag == object_etag
+            and (
+                object_version_id is None
+                or ingestion_run.object_version_id == object_version_id
+            )
+        ):
+            return ingestion_run
+        raise InvalidUploadStateError("run was already confirmed with another object")
+    if ingestion_run.status != RunStatus.AWAITING_CONFIRMATION:
+        raise InvalidUploadStateError(
+            f"upload cannot be confirmed while run is {ingestion_run.status.value}"
+        )
+
+    try:
+        metadata = s3_client.head_object(
+            Bucket=bucket_name,
+            Key=ingestion_run.s3_key,
+        )
+    except ClientError as exc:
+        error_code = str(exc.response.get("Error", {}).get("Code", ""))
+        status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if error_code in {"404", "NoSuchKey", "NotFound"} or status_code == 404:
+            raise ObjectVerificationError(
+                "completed object does not exist yet; S3 may still have an incomplete upload"
+            ) from exc
+        raise
+
+    content_length = metadata.get("ContentLength")
+    if content_length != ingestion_run.size_bytes:
+        raise ObjectVerificationError(
+            f"completed object has {content_length} bytes; expected {ingestion_run.size_bytes}"
+        )
+
+    stored_etag = metadata.get("ETag")
+    stored_version_id = metadata.get("VersionId")
+    if stored_etag != object_etag:
+        raise ObjectVerificationError("completed object's ETag does not match S3")
+    if object_version_id is not None and stored_version_id != object_version_id:
+        raise ObjectVerificationError("completed object's version does not match S3")
+
+    ingestion_run.uploaded_bytes = ingestion_run.size_bytes
+    ingestion_run.object_etag = stored_etag
+    ingestion_run.object_version_id = stored_version_id
+    ingestion_run.upload_confirmed_at = datetime.now(UTC)
+    ingestion_run.error_details = None
+    session.commit()
+    session.refresh(ingestion_run)
+    return ingestion_run
+
+
 def abort_multipart_upload(
     session: Session,
     s3_client: Any,
@@ -146,6 +324,8 @@ def abort_multipart_upload(
         and ingestion_run.error_details.get("code") == "UPLOAD_ABORTED"
     ):
         return ingestion_run
+    if ingestion_run.upload_confirmed_at is not None:
+        raise InvalidUploadStateError("a confirmed upload cannot be aborted")
     if ingestion_run.status not in {
         RunStatus.UPLOADING,
         RunStatus.AWAITING_CONFIRMATION,
