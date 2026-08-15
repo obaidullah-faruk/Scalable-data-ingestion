@@ -26,6 +26,32 @@ npm start
 
 Open `http://localhost:3000`. The API is available at `http://localhost:8000`, and Floci at `http://localhost:4566`.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser[React browser] -->|HTTP / SSE| Nginx[Nginx :8000]
+    Nginx --> API1[FastAPI replica 1]
+    Nginx --> API2[FastAPI replica 2]
+    API1 --> Postgres[(PostgreSQL)]
+    API2 --> Postgres
+    API1 --> RabbitMQ{{RabbitMQ\nshared queue}}
+    API2 --> RabbitMQ
+    RabbitMQ --> Worker1[Celery worker 1]
+    RabbitMQ --> Worker2[Celery worker 2]
+    Worker1 --> Postgres
+    Worker2 --> Postgres
+    Worker1 --> Redis[(Redis)]
+    Worker2 --> Redis
+    API1 --> Floci[(Floci S3)]
+    API2 --> Floci
+    Worker1 --> Floci
+    Worker2 --> Floci
+    Browser -->|presigned multipart upload| Floci
+```
+
+Docker Compose runs two FastAPI replicas behind Nginx and two Celery workers consuming from the same RabbitMQ broker and queue. Nginx is the only service that publishes the API port (`API_PORT`, default `8000`).
+
 The browser validates the selected CSV and configured size limit, creates an ingestion run, requests presigned part URLs in bounded batches, records each returned `ETag`, and offers individual retries for failed parts. It then submits the ordered manifest directly to Floci through a signed completion request. FastAPI verifies the final key, size, and ETag with `HeadObject` before recording upload confirmation. Celery independently validates, loads, and summarizes the CSV from S3, writing restart-safe checkpoints and result rows to PostgreSQL. Upload state is keyed by run UUID, so the same filename can be uploaded independently.
 
 ## Configuration

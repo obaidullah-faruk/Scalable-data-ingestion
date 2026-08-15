@@ -102,14 +102,17 @@ function useIngestionRunMonitor({uploads, updateUpload}) {
   useEffect(() => {
     try {
       const runIds = JSON.parse(localStorage.getItem(STORED_RUN_IDS_KEY) || '[]');
-      runIds.forEach((runId) => void refreshRunSnapshot(runId));
+      if (!Array.isArray(runIds)) return;
+      runIds
+        .filter((runId) => typeof runId === 'string' && runId)
+        .forEach((runId) => void refreshRunSnapshot(runId));
     } catch {
       // Ignore unavailable or malformed local browser state.
     }
   }, [refreshRunSnapshot]);
 
   useEffect(() => {
-    Object.values(uploads).forEach((upload) => {
+    Object.values(uploads).filter((upload) => upload?.runId).forEach((upload) => {
       const status = upload.runSnapshot?.status || upload.status.toUpperCase();
       if (!upload.monitorProcessing || isTerminalRun(status) || eventSources.current.has(upload.runId)) {
         return;

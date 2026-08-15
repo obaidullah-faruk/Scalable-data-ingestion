@@ -81,6 +81,22 @@ test('recovers a durable processing snapshot after a page refresh', async () => 
   global.EventSource = originalEventSource;
 });
 
+test('does not render an undefined upload when a remembered run cannot be restored', async () => {
+  localStorage.setItem('ingestion-run-ids', JSON.stringify(['missing-run']));
+  jest.spyOn(global, 'fetch').mockResolvedValue({
+    ok: false,
+    status: 404,
+    json: async () => ({detail: 'Run not found'}),
+  });
+
+  render(<App />);
+
+  await waitFor(() => {
+    expect(screen.getByText(/no uploads started in this browser session/i)).toBeInTheDocument();
+  });
+  expect(screen.getByText('0 local runs')).toBeInTheDocument();
+});
+
 test('validates that the selected file is a CSV', () => {
   render(<App />);
   const input = screen.getByLabelText(/select \.csv file/i);

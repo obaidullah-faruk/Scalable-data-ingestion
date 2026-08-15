@@ -10,10 +10,16 @@ import useMultipartIngestion from './components/useMultipartIngestion';
 function App() {
   const [uploads, setUploads] = useState({});
   const updateUpload = useCallback((runId, update) => {
-    setUploads((current) => ({
-      ...current,
-      [runId]: update(current[runId]),
-    }));
+    setUploads((current) => {
+      const nextUpload = update(current[runId]);
+      // A failed refresh for an old locally stored run has no existing upload
+      // to update. Do not add an undefined entry that the UI would render.
+      if (nextUpload === undefined) return current;
+      return {
+        ...current,
+        [runId]: nextUpload,
+      };
+    });
   }, []);
   const {rememberRun, refreshRunSnapshot} = useIngestionRunMonitor({
     uploads,
@@ -25,7 +31,9 @@ function App() {
     rememberRun,
     refreshRunSnapshot,
   });
-  const uploadEntries = Object.values(uploads).reverse();
+  const uploadEntries = Object.values(uploads)
+    .filter((upload) => upload?.runId)
+    .reverse();
 
   return (
     <Container component="main" maxWidth="lg" sx={{py: {xs: 4, md: 8}}}>

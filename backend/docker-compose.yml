@@ -84,10 +84,21 @@ services:
         condition: service_started
     restart: "no"
 
+  migrate:
+    build:
+      context: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ingestion}:${POSTGRES_PASSWORD:-ingestion}@${POSTGRES_CONTAINER_HOST:-postgres}:5432/${POSTGRES_DB:-ingestion}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build:
       context: .
-    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000"]
+    command: ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ingestion}:${POSTGRES_PASSWORD:-ingestion}@${POSTGRES_CONTAINER_HOST:-postgres}:5432/${POSTGRES_DB:-ingestion}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
@@ -107,8 +118,8 @@ services:
       PART_URL_BATCH_LIMIT: ${PART_URL_BATCH_LIMIT:-100}
       PRESIGNED_URL_EXPIRATION_SECONDS: ${PRESIGNED_URL_EXPIRATION_SECONDS:-900}
       REACT_ORIGIN: ${REACT_ORIGIN:-http://localhost:3000}
-    ports:
-      - "${API_PORT:-8000}:8000"
+    expose:
+      - "8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,12 +129,15 @@ services:
         condition: service_healthy
       floci-init:
         condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health').read()"]
       interval: 5s
       timeout: 5s
       retries: 12
     deploy:
+      replicas: 2
       resources:
         limits:
           cpus: "0.75"
@@ -132,7 +146,7 @@ services:
   worker:
     build:
       context: .
-    command: ["sh", "-c", "alembic upgrade head && celery -A app.workers.celery_app:celery_app worker --loglevel=INFO --without-mingle --without-gossip"]
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "--without-mingle", "--without-gossip"]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ingestion}:${POSTGRES_PASSWORD:-ingestion}@${POSTGRES_CONTAINER_HOST:-postgres}:5432/${POSTGRES_DB:-ingestion}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
@@ -158,11 +172,35 @@ services:
         condition: service_healthy
       floci-init:
         condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
     deploy:
+      replicas: 2
       resources:
         limits:
           cpus: "1.0"
           memory: 1536M
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${API_PORT:-8000}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
 
 volumes:
   postgres_data:
