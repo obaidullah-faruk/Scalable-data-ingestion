@@ -9,7 +9,7 @@ Local development project for importing CSV data through a React frontend, FastA
 
    ```sh
    cd backend
-   docker compose -f compose.yml up --build
+   docker compose -f docker-compose.yml up --build
    ```
 
 3. Verify the API:
