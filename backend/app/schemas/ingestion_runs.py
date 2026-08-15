@@ -2,7 +2,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import RunStatus
+from app.models import RunStatus, RunTaskStatus, RunTaskType
 
 
 ALLOWED_CSV_CONTENT_TYPES = {
@@ -116,8 +116,15 @@ class ConfirmUploadRequest(BaseModel):
         return validate_etag_value(object_etag)
 
 
+class RunTaskResponse(BaseModel):
+    task_type: RunTaskType
+    status: RunTaskStatus
+    celery_task_id: str | None
+
+
 class ConfirmUploadResponse(BaseModel):
     run_id: uuid.UUID
     status: RunStatus
     object_etag: str
     object_version_id: str | None
+    tasks: list[RunTaskResponse]

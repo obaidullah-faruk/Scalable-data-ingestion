@@ -9,9 +9,11 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 
 from botocore.awsrequest import AWSRequest
 from botocore.exceptions import BotoCoreError, ClientError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import IngestionRun, RunStatus
+from app.models import IngestionRun, RunStatus, RunTask, RunTaskStatus, RunTaskType
+from app.services.run_state import derive_run_state
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +308,97 @@ def confirm_completed_upload(
     session.commit()
     session.refresh(ingestion_run)
     return ingestion_run
+
+
+def confirm_and_queue_completed_upload(
+    session: Session,
+    s3_client: Any,
+    *,
+    run_id: uuid.UUID,
+    bucket_name: str,
+    object_etag: str,
+    object_version_id: str | None,
+) -> tuple[IngestionRun, bool]:
+    """Verify an uploaded object and atomically create its durable work rows.
+
+    The boolean indicates whether this call performed the confirmation. A
+    repeated confirmation deliberately returns ``False`` so the API does not
+    publish another set of Celery messages.
+    """
+    with session.begin():
+        ingestion_run = session.get(IngestionRun, run_id, with_for_update=True)
+        if ingestion_run is None:
+            raise IngestionRunNotFoundError
+        if ingestion_run.upload_confirmed_at is not None:
+            if (
+                ingestion_run.object_etag == object_etag
+                and (
+                    object_version_id is None
+                    or ingestion_run.object_version_id == object_version_id
+                )
+            ):
+                return ingestion_run, False
+            raise InvalidUploadStateError("run was already confirmed with another object")
+        if ingestion_run.status != RunStatus.AWAITING_CONFIRMATION:
+            raise InvalidUploadStateError(
+                f"upload cannot be confirmed while run is {ingestion_run.status.value}"
+            )
+
+        try:
+            metadata = s3_client.head_object(
+                Bucket=bucket_name,
+                Key=ingestion_run.s3_key,
+            )
+        except ClientError as exc:
+            error_code = str(exc.response.get("Error", {}).get("Code", ""))
+            status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if error_code in {"404", "NoSuchKey", "NotFound"} or status_code == 404:
+                raise ObjectVerificationError(
+                    "completed object does not exist yet; S3 may still have an incomplete upload"
+                ) from exc
+            raise
+
+        content_length = metadata.get("ContentLength")
+        if content_length != ingestion_run.size_bytes:
+            raise ObjectVerificationError(
+                f"completed object has {content_length} bytes; expected {ingestion_run.size_bytes}"
+            )
+
+        stored_etag = metadata.get("ETag")
+        stored_version_id = metadata.get("VersionId")
+        if stored_etag != object_etag:
+            raise ObjectVerificationError("completed object's ETag does not match S3")
+        if object_version_id is not None and stored_version_id != object_version_id:
+            raise ObjectVerificationError("completed object's version does not match S3")
+
+        ingestion_run.uploaded_bytes = ingestion_run.size_bytes
+        ingestion_run.object_etag = stored_etag
+        ingestion_run.object_version_id = stored_version_id
+        ingestion_run.upload_confirmed_at = datetime.now(UTC)
+        ingestion_run.error_details = None
+
+        existing_tasks = {
+            task.task_type: task
+            for task in session.scalars(
+                select(RunTask).where(RunTask.ingestion_run_id == ingestion_run.id)
+            )
+        }
+        task_rows = list(existing_tasks.values())
+        for task_type in RunTaskType:
+            task = existing_tasks.get(task_type)
+            if task is None:
+                task = RunTask(
+                    ingestion_run_id=ingestion_run.id,
+                    task_type=task_type,
+                    status=RunTaskStatus.QUEUED,
+                )
+                session.add(task)
+                task_rows.append(task)
+
+        session.flush()
+        derive_run_state(ingestion_run, task_rows)
+
+    return ingestion_run, True
 
 
 def abort_multipart_upload(

@@ -28,12 +28,13 @@ from app.services.multipart_uploads import (
     InvalidUploadStateError,
     ObjectVerificationError,
     abort_multipart_upload,
-    confirm_completed_upload,
+    confirm_and_queue_completed_upload,
     create_presigned_part_urls,
     create_signed_completion_request,
     required_part_count,
     start_multipart_upload,
 )
+from app.services.task_dispatch import dispatch_queued_tasks
 
 router = APIRouter(prefix="/api/v1/ingestion-runs", tags=["ingestion-runs"])
 
@@ -195,7 +196,7 @@ def confirm_upload(
     settings: AppSettings,
 ) -> ConfirmUploadResponse:
     try:
-        ingestion_run = confirm_completed_upload(
+        ingestion_run, newly_confirmed = confirm_and_queue_completed_upload(
             session,
             s3_client,
             run_id=run_id,
@@ -213,11 +214,23 @@ def confirm_upload(
     except (BotoCoreError, ClientError) as exc:
         raise s3_unavailable_error() from exc
 
+    if newly_confirmed:
+        dispatch_queued_tasks(session, run_id=run_id)
+        session.refresh(ingestion_run)
+
     return ConfirmUploadResponse(
         run_id=ingestion_run.id,
         status=ingestion_run.status,
         object_etag=ingestion_run.object_etag,
         object_version_id=ingestion_run.object_version_id,
+        tasks=[
+            {
+                "task_type": task.task_type,
+                "status": task.status,
+                "celery_task_id": task.celery_task_id,
+            }
+            for task in sorted(ingestion_run.tasks, key=lambda task: task.task_type.value)
+        ],
     )
 
 

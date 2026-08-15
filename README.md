@@ -47,6 +47,9 @@ docker compose run --rm --no-deps api pytest -q
 # Floci bucket, CORS, and multipart-completion smoke test (with Floci running)
 docker compose run --rm --no-deps floci-init python -m app.scripts.smoke_test_s3
 
+# Republish durable queued tasks left without a Celery ID (for example after an API stop)
+docker compose run --rm --no-deps api python -m app.scripts.reconcile_queued_tasks
+
 # Frontend tests and production build
 cd ../frontend
 CI=true npm test -- --runInBand
@@ -65,5 +68,5 @@ alembic upgrade head
 - `POST /api/v1/ingestion-runs` — validate metadata and create a unique multipart upload.
 - `POST /api/v1/ingestion-runs/{run_id}/part-urls` — issue a bounded set of presigned part URLs.
 - `POST /api/v1/ingestion-runs/{run_id}/completion-request` — validate the ordered ETag manifest and sign the S3 completion request.
-- `POST /api/v1/ingestion-runs/{run_id}/confirm-upload` — verify the finalized object and record its ETag/version.
+- `POST /api/v1/ingestion-runs/{run_id}/confirm-upload` — verify the finalized object, create the three durable processing tasks, and queue them in Celery.
 - `POST /api/v1/ingestion-runs/{run_id}/abort` — discard an unfinished multipart upload.

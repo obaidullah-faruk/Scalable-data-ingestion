@@ -13,7 +13,8 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db_session
 from app.integrations.s3 import get_s3_client, get_s3_presign_client
 from app.main import create_app
-from app.models import Base, IngestionRun, RunStatus
+from app.models import Base, IngestionRun, RunStatus, RunTask, RunTaskType
+from app.services import task_dispatch
 
 
 class FakeS3Client:
@@ -190,8 +191,17 @@ def test_abort_is_idempotent_and_marks_run_failed(api_context) -> None:
         assert run.error_details["code"] == "UPLOAD_ABORTED"
 
 
-def test_completion_is_signed_then_verified_with_head_object(api_context) -> None:
+def test_completion_is_signed_then_verified_with_head_object(
+    api_context, monkeypatch
+) -> None:
     client, fake_s3, testing_session = api_context
+    dispatched: list[tuple[str, dict[str, str]]] = []
+
+    def send_task(task_name: str, *, kwargs: dict[str, str]):
+        dispatched.append((task_name, kwargs))
+        return SimpleNamespace(id=f"celery-{len(dispatched)}")
+
+    monkeypatch.setattr(task_dispatch.celery_app, "send_task", send_task)
     run = create_run(client).json()
     parts = [
         {"part_number": number, "etag": f'"part-{number}"'}
@@ -234,14 +244,26 @@ def test_completion_is_signed_then_verified_with_head_object(api_context) -> Non
     )
 
     assert confirmed.status_code == 200
-    assert confirmed.json()["status"] == "AWAITING_CONFIRMATION"
+    assert confirmed.json()["status"] == "QUEUED"
+    assert len(confirmed.json()["tasks"]) == 3
+    assert {task["task_type"] for task in confirmed.json()["tasks"]} == {
+        task_type.value for task_type in RunTaskType
+    }
     assert repeated.status_code == 200
+    assert repeated.json()["tasks"] == confirmed.json()["tasks"]
+    assert len(dispatched) == 3
+    assert {task_name for task_name, _ in dispatched} == set(
+        task_dispatch.CELERY_TASK_NAMES.values()
+    )
     assert abort_confirmed.status_code == 409
     with testing_session() as session:
         persisted = session.get(IngestionRun, uuid.UUID(run["run_id"]))
         assert persisted.uploaded_bytes == persisted.size_bytes
         assert persisted.object_etag == '"completed-etag-3"'
         assert persisted.upload_confirmed_at is not None
+        task_rows = session.query(RunTask).filter_by(ingestion_run_id=persisted.id).all()
+        assert len(task_rows) == 3
+        assert all(task.celery_task_id for task in task_rows)
 
 
 def test_completion_rejects_missing_or_unordered_parts(api_context) -> None:
