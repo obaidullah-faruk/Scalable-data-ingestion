@@ -146,6 +146,8 @@ services:
       AWS_SECRET_ACCESS_KEY: ${FLOCI_SECRET_ACCESS_KEY:-test}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
       S3_UPLOAD_BUCKET: ${S3_UPLOAD_BUCKET:-csv-ingestion-uploads}
+      WORKER_CHECKPOINT_ROWS: ${WORKER_CHECKPOINT_ROWS:-1000}
+      WORKER_MAX_RETRIES: ${WORKER_MAX_RETRIES:-3}
       REACT_ORIGIN: ${REACT_ORIGIN:-http://localhost:3000}
     depends_on:
       postgres:

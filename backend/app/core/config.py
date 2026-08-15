@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Self
 from urllib.parse import quote_plus
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     max_upload_size_bytes: int = 5 * 1024 * 1024 * 1024
     part_url_batch_limit: int = 100
     presigned_url_expiration_seconds: int = 15 * 60
+    worker_checkpoint_rows: int = Field(default=1_000, gt=0)
+    worker_max_retries: int = Field(default=3, ge=0)
     aws_access_key_id: str = "test"
     aws_secret_access_key: str = "test"
     aws_default_region: str = "us-east-1"
