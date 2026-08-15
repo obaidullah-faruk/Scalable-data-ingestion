@@ -15,6 +15,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
 
   rabbitmq:
     image: rabbitmq:4-management
@@ -30,6 +35,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1G
 
   redis:
     image: redis:8
@@ -40,6 +50,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
 
   floci:
     image: floci/floci:latest
@@ -47,18 +62,24 @@ services:
       - "${FLOCI_PORT:-4566}:4566"
     volumes:
       - floci_data:/app/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1G
 
   api:
     build:
-      context: ./backend
-    command: ["python", "health_server.py"]
+      context: .
+    command: ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     environment:
-      POSTGRES_HOST: ${POSTGRES_CONTAINER_HOST:-postgres}
-      POSTGRES_PORT: "5432"
-      RABBITMQ_HOST: ${RABBITMQ_CONTAINER_HOST:-rabbitmq}
-      RABBITMQ_PORT: "5672"
-      REDIS_HOST: ${REDIS_CONTAINER_HOST:-redis}
-      REDIS_PORT: "6379"
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ingestion}:${POSTGRES_PASSWORD:-ingestion}@${POSTGRES_CONTAINER_HOST:-postgres}:5432/${POSTGRES_DB:-ingestion}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ingestion}:${RABBITMQ_PASSWORD:-ingestion}@${RABBITMQ_CONTAINER_HOST:-rabbitmq}:5672//
+      REDIS_URL: redis://${REDIS_CONTAINER_HOST:-redis}:6379/0
       FLOCI_ENDPOINT_URL: ${FLOCI_CONTAINER_ENDPOINT_URL:-http://floci:4566}
       AWS_ACCESS_KEY_ID: ${FLOCI_ACCESS_KEY_ID:-test}
       AWS_SECRET_ACCESS_KEY: ${FLOCI_SECRET_ACCESS_KEY:-test}
@@ -79,18 +100,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1G
 
   worker:
     build:
-      context: ./backend
-    command: ["python", "worker.py"]
+      context: .
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO"]
     environment:
-      POSTGRES_HOST: ${POSTGRES_CONTAINER_HOST:-postgres}
-      POSTGRES_PORT: "5432"
-      RABBITMQ_HOST: ${RABBITMQ_CONTAINER_HOST:-rabbitmq}
-      RABBITMQ_PORT: "5672"
-      REDIS_HOST: ${REDIS_CONTAINER_HOST:-redis}
-      REDIS_PORT: "6379"
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ingestion}:${POSTGRES_PASSWORD:-ingestion}@${POSTGRES_CONTAINER_HOST:-postgres}:5432/${POSTGRES_DB:-ingestion}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ingestion}:${RABBITMQ_PASSWORD:-ingestion}@${RABBITMQ_CONTAINER_HOST:-rabbitmq}:5672//
+      REDIS_URL: redis://${REDIS_CONTAINER_HOST:-redis}:6379/0
       FLOCI_ENDPOINT_URL: ${FLOCI_CONTAINER_ENDPOINT_URL:-http://floci:4566}
       AWS_ACCESS_KEY_ID: ${FLOCI_ACCESS_KEY_ID:-test}
       AWS_SECRET_ACCESS_KEY: ${FLOCI_SECRET_ACCESS_KEY:-test}
@@ -104,6 +131,11 @@ services:
         condition: service_healthy
       floci:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
 
 volumes:
   postgres_data:
