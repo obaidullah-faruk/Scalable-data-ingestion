@@ -1,6 +1,6 @@
 # Scalable Data Ingestion
 
-Local development project for importing CSV data through a React frontend, FastAPI API, Celery workers, PostgreSQL, RabbitMQ, Redis, and Floci S3.
+Importing CSV data through a React frontend, FastAPI API, Celery workers, PostgreSQL, RabbitMQ, Redis, and Floci S3.
 
 ## Setup
 
@@ -11,6 +11,45 @@ Local development project for importing CSV data through a React frontend, FastA
    cd backend
    docker compose -f docker-compose.yml up --build
    ```
+
+   The API and worker apply the database schema migration before starting. To apply it explicitly from the host:
+
+   ```sh
+   cd backend
+   alembic upgrade head
+   ```
+
+   Alembic reads the database connection from `backend/.env`. When `DATABASE_URL` is not set, it builds the URL from `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, and `POSTGRES_DB`.
+
+## Database migrations
+
+After changing the SQLAlchemy models, generate a proposed migration:
+
+```sh
+cd backend
+alembic revision --autogenerate -m "add content hash"
+```
+
+Review the generated file under `backend/alembic/versions/`, then apply it:
+
+```sh
+alembic upgrade head
+```
+
+To preview the SQL without connecting to or changing the database:
+
+```sh
+alembic upgrade head --sql
+```
+
+If Alembic is not installed on the host, migrations can still be applied through the backend image after starting PostgreSQL:
+
+```sh
+cd backend
+docker compose run --rm api alembic upgrade head
+```
+
+Generate revision files from the host environment so the new file is written into your local `backend/alembic/versions/` directory.
 
 3. Verify the API:
 
