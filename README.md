@@ -1,97 +1,69 @@
 # Scalable Data Ingestion
 
-Importing CSV data through a React frontend, FastAPI API, Celery workers, PostgreSQL, RabbitMQ, Redis, and Floci S3.
+A local CSV ingestion project using React with Material UI, FastAPI, PostgreSQL, Floci S3, RabbitMQ, Celery, and Redis.
 
-## Setup
+The current implementation creates a durable ingestion run, splits a CSV into 8 MiB parts in the browser, and uploads up to three parts concurrently directly to Floci. FastAPI receives file metadata only; it never receives CSV bytes.
 
-1. Optionally copy `backend/.env.example` to `backend/.env` and adjust local ports or credentials.
-2. Start the local services:
+## Run locally
 
-   ```sh
-   cd backend
-   docker compose -f docker-compose.yml up --build
-   ```
-
-   The API and worker apply the database schema migration before starting. To apply it explicitly from the host:
-
-   ```sh
-   cd backend
-   alembic upgrade head
-   ```
-
-   Alembic reads the database connection from `backend/.env`. When `DATABASE_URL` is not set, it builds the URL from `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, and `POSTGRES_DB`.
-
-3. Verify the API:
-
-   ```sh
-   curl http://localhost:8000/health
-   ```
-
-## Database migrations
-
-After changing the SQLAlchemy models, generate a proposed migration:
+Start the backend services:
 
 ```sh
 cd backend
-alembic revision --autogenerate -m "add content hash"
+cp .env.example .env  # optional
+docker compose up --build
 ```
 
-Review the generated file under `backend/alembic/versions/`, then apply it:
+Start React in another terminal:
 
 ```sh
+cd frontend
+npm install
+npm start
+```
+
+Open `http://localhost:3000`. The API is available at `http://localhost:8000`, and Floci at `http://localhost:4566`.
+
+The browser validates the selected CSV and configured size limit, creates an ingestion run, requests presigned part URLs in bounded batches, records each returned `ETag`, and offers individual retries for failed parts. Upload state is keyed by run UUID, so uploading the same filename again creates a separate entry.
+
+Multipart completion is intentionally deferred to Phase 7. At the end of Phase 6, successful parts remain temporary in Floci and can still be aborted.
+
+## Configuration
+
+Backend configuration is documented in `backend/.env.example`. Relevant frontend build settings are optional:
+
+```sh
+REACT_APP_API_BASE_URL=http://localhost:8000
+REACT_APP_MAX_UPLOAD_SIZE_BYTES=5368709120
+```
+
+The frontend maximum should match backend `MAX_UPLOAD_SIZE_BYTES`.
+
+## Useful commands
+
+```sh
+# Backend tests
+cd backend
+docker compose run --rm --no-deps api pytest -q
+
+# Floci bucket/CORS smoke test (with Floci running)
+docker compose run --rm --no-deps floci-init python -m app.scripts.smoke_test_s3
+
+# Frontend tests and production build
+cd ../frontend
+CI=true npm test -- --runInBand
+npm run build
+```
+
+Database migrations run automatically before the API and worker start. After changing SQLAlchemy models, generate and apply a migration from `backend/`:
+
+```sh
+alembic revision --autogenerate -m "describe change"
 alembic upgrade head
 ```
 
-To preview the SQL without connecting to or changing the database:
+## Upload endpoints
 
-```sh
-alembic upgrade head --sql
-```
-
-If Alembic is not installed on the host, migrations can still be applied through the backend image after starting PostgreSQL:
-
-```sh
-cd backend
-docker compose run --rm api alembic upgrade head
-```
-
-Generate revision files from the host environment so the new file is written into your local `backend/alembic/versions/` directory.
-
-## Floci S3 bucket and CORS
-
-Compose runs the one-shot `floci-init` service before the API and worker. It idempotently creates the `S3_UPLOAD_BUCKET` bucket and applies a CORS policy for `REACT_ORIGIN`. The policy permits browser multipart `PUT`, completion `POST`, and `HEAD` requests, and exposes the `ETag` response header.
-
-After the Compose stack is running, verify the bucket, object round-trip, simulated browser preflight, and browser-readable `ETag`:
-
-```sh
-cd backend
-docker compose run --rm --no-deps floci-init python -m app.scripts.smoke_test_s3
-```
-
-The Floci credentials are dummy local credentials used only by backend containers. They are never sent to React; later phases give React short-lived presigned requests instead.
-
-## Multipart upload API
-
-Start an independent ingestion run and multipart upload:
-
-```sh
-curl -X POST http://localhost:8000/api/v1/ingestion-runs \
-  -H 'Content-Type: application/json' \
-  -d '{"filename":"gdp.csv","content_type":"text/csv","byte_size":20000000}'
-```
-
-Every call creates a new run UUID, S3 upload ID, and object key, including when the filename is repeated. The response reports the configured part size, required number of parts, and the part-URL endpoint.
-
-Request a bounded batch of presigned upload-part URLs:
-
-```sh
-curl -X POST http://localhost:8000/api/v1/ingestion-runs/RUN_ID/part-urls \
-  -H 'Content-Type: application/json' \
-  -d '{"part_numbers":[1,2,3]}'
-```
-
-Abort an unfinished multipart upload:
-
-```sh
-curl -X POST http://localhost:8000/api/v1/ingestion-runs/RUN_ID/abort
-```
+- `POST /api/v1/ingestion-runs` — validate metadata and create a unique multipart upload.
+- `POST /api/v1/ingestion-runs/{run_id}/part-urls` — issue a bounded set of presigned part URLs.
+- `POST /api/v1/ingestion-runs/{run_id}/abort` — discard an unfinished multipart upload.
