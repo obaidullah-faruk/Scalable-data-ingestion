@@ -21,6 +21,12 @@ Importing CSV data through a React frontend, FastAPI API, Celery workers, Postgr
 
    Alembic reads the database connection from `backend/.env`. When `DATABASE_URL` is not set, it builds the URL from `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, and `POSTGRES_DB`.
 
+3. Verify the API:
+
+   ```sh
+   curl http://localhost:8000/health
+   ```
+
 ## Database migrations
 
 After changing the SQLAlchemy models, generate a proposed migration:
@@ -51,8 +57,15 @@ docker compose run --rm api alembic upgrade head
 
 Generate revision files from the host environment so the new file is written into your local `backend/alembic/versions/` directory.
 
-3. Verify the API:
+## Floci S3 bucket and CORS
 
-   ```sh
-   curl http://localhost:8000/health
-   ```
+Compose runs the one-shot `floci-init` service before the API and worker. It idempotently creates the `S3_UPLOAD_BUCKET` bucket and applies a CORS policy for `REACT_ORIGIN`. The policy permits browser multipart `PUT`, completion `POST`, and `HEAD` requests, and exposes the `ETag` response header.
+
+After the Compose stack is running, verify the bucket, object round-trip, simulated browser preflight, and browser-readable `ETag`:
+
+```sh
+cd backend
+docker compose run --rm --no-deps floci-init python -m app.scripts.smoke_test_s3
+```
+
+The Floci credentials are dummy local credentials used only by backend containers. They are never sent to React; later phases give React short-lived presigned requests instead.

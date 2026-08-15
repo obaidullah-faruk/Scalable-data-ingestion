@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Scalable Data Ingestion"
     log_level: str = "INFO"
-    cors_origins: list[str] = ["http://localhost:5173"]
+    react_origin: str = "http://localhost:3000"
     database_url: str = ""
     postgres_db: str = "ingestion"
     postgres_user: str = "ingestion"
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     celery_broker_url: str = "amqp://ingestion:ingestion@rabbitmq:5672//"
     redis_url: str = "redis://redis:6379/0"
     floci_endpoint_url: str = "http://floci:4566"
+    s3_upload_bucket: str = "csv-ingestion-uploads"
     aws_access_key_id: str = "test"
     aws_secret_access_key: str = "test"
     aws_default_region: str = "us-east-1"
@@ -43,6 +44,10 @@ class Settings(BaseSettings):
                 f"@{self.postgres_host}:{self.postgres_port}/{database}"
             )
         return self
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [self.react_origin]
 
 
 @lru_cache
