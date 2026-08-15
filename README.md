@@ -69,3 +69,29 @@ docker compose run --rm --no-deps floci-init python -m app.scripts.smoke_test_s3
 ```
 
 The Floci credentials are dummy local credentials used only by backend containers. They are never sent to React; later phases give React short-lived presigned requests instead.
+
+## Multipart upload API
+
+Start an independent ingestion run and multipart upload:
+
+```sh
+curl -X POST http://localhost:8000/api/v1/ingestion-runs \
+  -H 'Content-Type: application/json' \
+  -d '{"filename":"gdp.csv","content_type":"text/csv","byte_size":20000000}'
+```
+
+Every call creates a new run UUID, S3 upload ID, and object key, including when the filename is repeated. The response reports the configured part size, required number of parts, and the part-URL endpoint.
+
+Request a bounded batch of presigned upload-part URLs:
+
+```sh
+curl -X POST http://localhost:8000/api/v1/ingestion-runs/RUN_ID/part-urls \
+  -H 'Content-Type: application/json' \
+  -d '{"part_numbers":[1,2,3]}'
+```
+
+Abort an unfinished multipart upload:
+
+```sh
+curl -X POST http://localhost:8000/api/v1/ingestion-runs/RUN_ID/abort
+```

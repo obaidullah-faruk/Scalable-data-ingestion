@@ -29,7 +29,7 @@ def wait_for_s3(s3_client: Any, attempts: int = 30, delay_seconds: float = 1) ->
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
-    s3_client = get_s3_client(settings)
+    s3_client = get_s3_client()
     wait_for_s3(s3_client)
     created = ensure_upload_bucket(
         s3_client,

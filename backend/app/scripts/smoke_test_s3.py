@@ -63,7 +63,7 @@ def smoke_test_browser_etag(
 
 def main() -> None:
     settings = get_settings()
-    s3_client = get_s3_client(settings)
+    s3_client = get_s3_client()
     assert_bucket_cors(s3_client, settings.s3_upload_bucket, settings.react_origin)
     smoke_test_object_round_trip(s3_client, settings.s3_upload_bucket)
     smoke_test_browser_etag(

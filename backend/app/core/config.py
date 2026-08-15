@@ -28,7 +28,12 @@ class Settings(BaseSettings):
     celery_broker_url: str = "amqp://ingestion:ingestion@rabbitmq:5672//"
     redis_url: str = "redis://redis:6379/0"
     floci_endpoint_url: str = "http://floci:4566"
+    floci_browser_endpoint_url: str = "http://localhost:4566"
     s3_upload_bucket: str = "csv-ingestion-uploads"
+    upload_part_size_bytes: int = 8 * 1024 * 1024
+    max_upload_size_bytes: int = 5 * 1024 * 1024 * 1024
+    part_url_batch_limit: int = 100
+    presigned_url_expiration_seconds: int = 15 * 60
     aws_access_key_id: str = "test"
     aws_secret_access_key: str = "test"
     aws_default_region: str = "us-east-1"
