@@ -84,7 +84,6 @@ def api_context() -> Generator[tuple[TestClient, FakeS3Client, sessionmaker], No
     testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     fake_s3 = FakeS3Client()
     settings = Settings(
-        _env_file=None,
         database_url="sqlite://",
         upload_part_size_bytes=8 * 1024 * 1024,
         max_upload_size_bytes=5 * 1024 * 1024 * 1024,

@@ -54,7 +54,7 @@ S3PresignClient = Annotated[Any, Depends(get_s3_presign_client)]
 def s3_unavailable_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
-        detail="Local object storage request failed",
+        detail="Object storage request failed",
     )
 
 

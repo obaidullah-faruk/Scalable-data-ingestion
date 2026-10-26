@@ -7,10 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(extra="ignore")
 
     app_name: str = "Scalable Data Ingestion"
     log_level: str = "INFO"
@@ -27,8 +24,10 @@ class Settings(BaseSettings):
     db_pool_recycle_seconds: int = 1800
     celery_broker_url: str = "amqp://ingestion:ingestion@rabbitmq:5672//"
     redis_url: str = "redis://redis:6379/0"
-    floci_endpoint_url: str = "http://floci:4566"
-    floci_browser_endpoint_url: str = "http://localhost:4566"
+    # Unset for AWS S3. Set for an S3-compatible store such as Floci.
+    s3_endpoint_url: str | None = None
+    # Endpoint in presigned URLs, which browsers call. Defaults to s3_endpoint_url.
+    s3_browser_endpoint_url: str | None = None
     s3_upload_bucket: str = "csv-ingestion-uploads"
     upload_part_size_bytes: int = 8 * 1024 * 1024
     max_upload_size_bytes: int = 5 * 1024 * 1024 * 1024
@@ -36,8 +35,6 @@ class Settings(BaseSettings):
     presigned_url_expiration_seconds: int = 15 * 60
     worker_checkpoint_rows: int = Field(default=1_000, gt=0)
     worker_max_retries: int = Field(default=3, ge=0)
-    aws_access_key_id: str = "test"
-    aws_secret_access_key: str = "test"
     aws_default_region: str = "us-east-1"
 
     @model_validator(mode="after")

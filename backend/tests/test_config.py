@@ -3,7 +3,6 @@ from app.core.config import Settings
 
 def test_database_url_is_built_from_postgres_settings() -> None:
     settings = Settings(
-        _env_file=None,
         database_url="",
         postgres_user="test user",
         postgres_password="p@ssword",
@@ -21,6 +20,6 @@ def test_database_url_is_built_from_postgres_settings() -> None:
 def test_explicit_database_url_takes_precedence() -> None:
     explicit_url = "postgresql+psycopg://user:password@database:5432/example"
 
-    settings = Settings(_env_file=None, database_url=explicit_url)
+    settings = Settings(database_url=explicit_url)
 
     assert settings.database_url == explicit_url

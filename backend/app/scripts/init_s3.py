@@ -20,10 +20,10 @@ def wait_for_s3(s3_client: Any, attempts: int = 30, delay_seconds: float = 1) ->
             return
         except (BotoCoreError, ClientError) as exc:
             last_error = exc
-            logger.info("waiting for Floci S3", extra={"attempt": attempt})
+            logger.info("waiting for S3", extra={"attempt": attempt})
             if attempt < attempts:
                 time.sleep(delay_seconds)
-    raise RuntimeError("Floci S3 did not become ready") from last_error
+    raise RuntimeError("S3 did not become ready") from last_error
 
 
 def main() -> None:
@@ -38,7 +38,7 @@ def main() -> None:
         settings.aws_default_region,
     )
     logger.info(
-        "Floci upload bucket configured",
+        "Upload bucket configured",
         extra={"bucket": settings.s3_upload_bucket, "bucket_created": created},
     )
 
