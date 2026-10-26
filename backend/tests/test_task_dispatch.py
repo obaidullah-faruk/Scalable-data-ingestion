@@ -1,10 +1,17 @@
-from types import SimpleNamespace
 import uuid
+from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models import Base, IngestionRun, RunStatus, RunTask, RunTaskStatus, RunTaskType
+from app.models import (
+    Base,
+    IngestionRun,
+    RunStatus,
+    RunTask,
+    RunTaskStatus,
+    RunTaskType,
+)
 from app.services import task_dispatch
 
 

@@ -12,7 +12,7 @@ from app.main import create_app
 def client_with_database(database_url: str) -> TestClient:
     testing_session = sessionmaker(bind=create_engine(database_url))
 
-    def override_session() -> Generator[Session, None, None]:
+    def override_session() -> Generator[Session]:
         with testing_session() as session:
             yield session
 

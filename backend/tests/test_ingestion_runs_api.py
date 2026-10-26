@@ -74,7 +74,7 @@ class FakeRequestSigner:
 
 
 @pytest.fixture
-def api_context() -> Generator[tuple[TestClient, FakeS3Client, sessionmaker], None, None]:
+def api_context() -> Generator[tuple[TestClient, FakeS3Client, sessionmaker]]:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -91,7 +91,7 @@ def api_context() -> Generator[tuple[TestClient, FakeS3Client, sessionmaker], No
         presigned_url_expiration_seconds=900,
     )
 
-    def override_session() -> Generator[Session, None, None]:
+    def override_session() -> Generator[Session]:
         with testing_session() as session:
             yield session
 
@@ -363,12 +363,12 @@ def test_run_snapshot_and_terminal_sse_are_durable(api_context) -> None:
                 units="Dollars",
                 valid_observation_count=10,
                 first_period=date(2020, 3, 1),
-                first_value=Decimal("100"),
+                first_value=Decimal(100),
                 latest_period=date(2020, 6, 1),
-                latest_value=Decimal("105"),
-                min_value=Decimal("100"),
-                max_value=Decimal("105"),
-                quarter_to_quarter_change=Decimal("5"),
+                latest_value=Decimal(105),
+                min_value=Decimal(100),
+                max_value=Decimal(105),
+                quarter_to_quarter_change=Decimal(5),
             )
         )
         session.commit()

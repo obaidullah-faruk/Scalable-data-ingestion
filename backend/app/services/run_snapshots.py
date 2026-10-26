@@ -13,7 +13,6 @@ from app.schemas.ingestion_runs import (
     ValidationProfileResponse,
 )
 
-
 TERMINAL_RUN_STATUSES = {"SUCCEEDED", "PARTIALLY_FAILED", "FAILED"}
 
 

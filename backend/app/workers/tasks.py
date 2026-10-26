@@ -1,9 +1,10 @@
 """Celery implementations for the three independent CSV ingestion tasks."""
 
+import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Callable
-import uuid
+from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 from celery import Task
