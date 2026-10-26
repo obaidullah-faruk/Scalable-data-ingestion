@@ -216,5 +216,5 @@ test('uploads CSV bytes only through presigned Floci URLs', async () => {
     object_etag: '"final-etag"',
     object_version_id: null,
   });
-  await waitFor(() => expect(screen.getByText('100%')).toBeInTheDocument());
+  await screen.findByText('100%');
 });
