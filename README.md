@@ -87,6 +87,7 @@ The api reports its health on two endpoints:
 cd backend
 python3.14 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/ruff check .
 .venv/bin/pytest -q
 
 # Floci bucket, CORS, and multipart-completion smoke test (with Compose running)
@@ -96,11 +97,30 @@ set -a; source .env.example; set +a
 # Republish durable queued tasks left without a Celery ID (for example after an API stop)
 docker compose run --rm --no-deps api python -m app.scripts.reconcile_queued_tasks
 
-# Frontend tests and production build
+# Frontend lint, tests and production build
 cd ../frontend
+npm run lint
 CI=true npm test -- --runInBand
 npm run build
 ```
+
+## CI and releases
+
+Every pull request runs `.github/workflows/ci.yml`:
+
+| Job | Checks |
+|---|---|
+| backend | ruff, pytest, and `alembic upgrade head` plus `alembic check` against PostgreSQL |
+| frontend | ESLint, tests and a production build |
+| hadolint, actionlint | Dockerfiles and workflows |
+| image | Builds each image for arm64 and fails on fixable HIGH or CRITICAL vulnerabilities |
+| ci-passed | Passes only when every job above passed. Branch rules require this one check. |
+
+A vulnerability that doesn't affect the app can be accepted in `.trivyignore`, with the reason next to it.
+
+Each merge to `main` runs `.github/workflows/release.yml`, which builds both images for arm64 and pushes them to Docker Hub tagged with the commit SHA. It needs the `DOCKERHUB_TOKEN` secret, a Docker Hub access token with Read & Write access.
+
+Third-party actions are pinned to a commit SHA, with the version in a comment.
 
 Database migrations run automatically before the API and worker start. After changing SQLAlchemy models, generate and apply a migration from `backend/`:
 
