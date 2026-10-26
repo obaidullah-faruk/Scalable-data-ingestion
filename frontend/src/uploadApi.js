@@ -1,6 +1,5 @@
-const API_BASE_URL = (
-  process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000'
-).replace(/\/$/, '');
+// Empty means the API is on the same host as the page, under /api.
+const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/$/, '');
 
 async function apiRequest(path, options) {
   const response = await fetch(`${API_BASE_URL}${path}`, options);

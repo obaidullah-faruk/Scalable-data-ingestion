@@ -75,7 +75,7 @@ test('recovers a durable processing snapshot after a page refresh', async () => 
   expect(screen.getByText('40%')).toBeInTheDocument();
   expect(screen.getByText(/20 rows .* 1 missing values/i)).toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledWith(
-    'http://localhost:8000/api/v1/ingestion-runs/durable-run',
+    '/api/v1/ingestion-runs/durable-run',
     undefined,
   );
   global.EventSource = originalEventSource;
@@ -111,7 +111,7 @@ test('validates that the selected file is a CSV', () => {
 
 test('uploads CSV bytes only through presigned Floci URLs', async () => {
   const fetchMock = jest.spyOn(global, 'fetch').mockImplementation((url) => {
-    if (url === 'http://localhost:8000/api/v1/ingestion-runs') {
+    if (url === '/api/v1/ingestion-runs') {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -124,7 +124,7 @@ test('uploads CSV bytes only through presigned Floci URLs', async () => {
         }),
       });
     }
-    if (url === 'http://localhost:8000/api/v1/ingestion-runs/run-1/part-urls') {
+    if (url === '/api/v1/ingestion-runs/run-1/part-urls') {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -135,7 +135,7 @@ test('uploads CSV bytes only through presigned Floci URLs', async () => {
         }),
       });
     }
-    if (url === 'http://localhost:8000/api/v1/ingestion-runs/run-1/completion-request') {
+    if (url === '/api/v1/ingestion-runs/run-1/completion-request') {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -158,7 +158,7 @@ test('uploads CSV bytes only through presigned Floci URLs', async () => {
         headers: {get: () => null},
       });
     }
-    if (url === 'http://localhost:8000/api/v1/ingestion-runs/run-1/confirm-upload') {
+    if (url === '/api/v1/ingestion-runs/run-1/confirm-upload') {
       return Promise.resolve({
         ok: true,
         json: async () => ({status: 'AWAITING_CONFIRMATION'}),
