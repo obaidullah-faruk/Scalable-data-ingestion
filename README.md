@@ -118,7 +118,19 @@ Every pull request runs `.github/workflows/ci.yml`:
 
 A vulnerability that doesn't affect the app can be accepted in `.trivyignore`, with the reason next to it.
 
-Each merge to `main` runs `.github/workflows/release.yml`, which builds both images for arm64 and pushes them to Docker Hub tagged with the commit SHA. It needs the `DOCKERHUB_TOKEN` secret, a Docker Hub access token with Read & Write access.
+Delivery goes through the [gitops repo](https://github.com/obaidullah-faruk/Scalable-Data-Ingestion-gitops). CI never gets cluster credentials; ArgoCD pulls from Git.
+
+1. **Merge to `main`:** `.github/workflows/release.yml` builds both images for arm64, pushes them to Docker Hub tagged with the commit SHA, and sets their tag and digest in the gitops repo's dev overlay. ArgoCD deploys dev.
+2. **Tag `vX.Y.Z` on a commit of `main`:** `.github/workflows/promote.yml` opens a pull request that sets the same digests in the prod overlay. Nothing is rebuilt. Prod changes once the owner approves and merges it.
+3. **Roll back:** revert the overlay commit in the gitops repo.
+
+The workflows write to the gitops repo as a GitHub App installed only there. They need:
+
+| Name | Kind | Value |
+|---|---|---|
+| `DOCKERHUB_TOKEN` | secret | Docker Hub access token with Read & Write access |
+| `GITOPS_APP_CLIENT_ID` | variable | the App's Client ID |
+| `GITOPS_APP_PRIVATE_KEY` | secret | a private key of the App |
 
 Third-party actions are pinned to a commit SHA, with the version in a comment.
 
