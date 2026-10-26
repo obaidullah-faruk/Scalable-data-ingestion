@@ -67,10 +67,13 @@ def dispatch_queued_tasks(
             task.celery_task_id = result.id
             dispatched.append(task)
             logger.info(
-                "Queued ingestion task %s (%s) as Celery task %s",
-                task.id,
-                task.task_type.value,
+                "Task queued as Celery task %s",
                 task.celery_task_id,
+                extra={
+                    "run_id": str(task.ingestion_run_id),
+                    "task_id": str(task.id),
+                    "task_type": task.task_type.value,
+                },
             )
 
     return dispatched

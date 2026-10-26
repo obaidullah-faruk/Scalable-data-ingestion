@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from collections.abc import Iterator
 from typing import Annotated, Any
@@ -42,6 +43,8 @@ from app.services.multipart_uploads import (
 from app.services.progress_events import PROGRESS_CHANNEL, get_progress_subscriber
 from app.services.run_snapshots import get_run_snapshot, is_terminal_run_status
 from app.services.task_dispatch import dispatch_queued_tasks
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/ingestion-runs", tags=["ingestion-runs"])
 
@@ -171,6 +174,12 @@ def create_ingestion_run(
     except (BotoCoreError, ClientError) as exc:
         raise s3_unavailable_error() from exc
 
+    logger.info(
+        "Run created for a %s-byte upload in %s parts",
+        request.byte_size,
+        total_parts,
+        extra={"run_id": str(ingestion_run.id)},
+    )
     return CreateIngestionRunResponse(
         run_id=ingestion_run.id,
         status=ingestion_run.status,
@@ -302,6 +311,7 @@ def confirm_upload(
         raise s3_unavailable_error() from exc
 
     if newly_confirmed:
+        logger.info("Upload confirmed", extra={"run_id": str(run_id)})
         dispatch_queued_tasks(session, run_id=run_id)
         session.refresh(ingestion_run)
 

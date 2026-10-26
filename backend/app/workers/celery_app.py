@@ -1,6 +1,8 @@
 from celery import Celery
+from celery.signals import setup_logging
 
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 
 settings = get_settings()
 celery_app = Celery(
@@ -22,3 +24,9 @@ celery_app.conf.update(
     },
     worker_enable_remote_control=False,
 )
+
+
+@setup_logging.connect
+def configure_worker_logging(**_: object) -> None:
+    """Log as JSON at LOG_LEVEL. Connecting this signal stops Celery from setting up its own."""
+    configure_logging(settings.log_level)
