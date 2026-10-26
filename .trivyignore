@@ -1,0 +1,3 @@
+# Vulnerabilities accepted after review. The image scan in CI skips these IDs.
+# Add one ID per line, with a comment above it: why it doesn't affect us, who reviewed it, and
+# when to look at it again. Remove the entry once a fixed version is available.
