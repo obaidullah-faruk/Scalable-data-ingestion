@@ -80,6 +80,10 @@ The api reports its health on two endpoints:
 - `GET /health/live`: the process is up. It never checks dependencies.
 - `GET /health/ready`: PostgreSQL answers. Returns `503` when it does not.
 
+`GET /metrics` serves Prometheus metrics: request counts by route, method and status, and request latency. An SSE stream counts as one request; the time it stays open is not counted as latency.
+
+Every backend process logs one JSON object per line, at the level set by `LOG_LEVEL`. Lines about an ingestion run carry `run_id`, and lines about one of its tasks also carry `task_id` and `task_type`, so one upload can be followed from the api to the workers.
+
 ## Useful commands
 
 ```sh
