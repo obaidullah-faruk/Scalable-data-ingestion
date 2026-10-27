@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import RunStatus, RunTaskStatus, RunTaskType
 
-
 ALLOWED_CSV_CONTENT_TYPES = {
     "application/csv",
     "application/vnd.ms-excel",

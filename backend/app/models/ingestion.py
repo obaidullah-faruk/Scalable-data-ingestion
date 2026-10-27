@@ -3,7 +3,22 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
@@ -65,10 +80,10 @@ class IngestionRun(Base, Timestamped):
     processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    tasks: Mapped[list["RunTask"]] = relationship(back_populates="ingestion_run", cascade="all, delete-orphan")
-    validation_profile: Mapped["RunValidationProfile | None"] = relationship(back_populates="ingestion_run", cascade="all, delete-orphan")
-    observations: Mapped[list["GdpObservation"]] = relationship(back_populates="ingestion_run", cascade="all, delete-orphan")
-    series_summaries: Mapped[list["GdpSeriesSummary"]] = relationship(back_populates="ingestion_run", cascade="all, delete-orphan")
+    tasks: Mapped[list[RunTask]] = relationship(back_populates="ingestion_run", cascade="all, delete-orphan")
+    validation_profile: Mapped[RunValidationProfile | None] = relationship(back_populates="ingestion_run", cascade="all, delete-orphan")
+    observations: Mapped[list[GdpObservation]] = relationship(back_populates="ingestion_run", cascade="all, delete-orphan")
+    series_summaries: Mapped[list[GdpSeriesSummary]] = relationship(back_populates="ingestion_run", cascade="all, delete-orphan")
 
 
 class RunTask(Base, Timestamped):
@@ -78,6 +93,7 @@ class RunTask(Base, Timestamped):
         CheckConstraint("progress_percent BETWEEN 0 AND 100", name="ck_run_tasks_progress_range"),
         CheckConstraint("processed_rows >= 0", name="ck_run_tasks_processed_rows_nonnegative"),
         CheckConstraint("retry_count >= 0", name="ck_run_tasks_retry_count_nonnegative"),
+        Index("ix_run_tasks_ingestion_run_id", "ingestion_run_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -113,7 +129,10 @@ class RunValidationProfile(Base, Timestamped):
 
 class GdpObservation(Base, Timestamped):
     __tablename__ = "gdp_observations"
-    __table_args__ = (UniqueConstraint("ingestion_run_id", "source_row_number", name="uq_gdp_observations_run_source_row"),)
+    __table_args__ = (
+        UniqueConstraint("ingestion_run_id", "source_row_number", name="uq_gdp_observations_run_source_row"),
+        Index("ix_gdp_observations_run_series_period", "ingestion_run_id", "series_reference", "period"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     ingestion_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
@@ -137,7 +156,10 @@ class GdpObservation(Base, Timestamped):
 
 class GdpSeriesSummary(Base, Timestamped):
     __tablename__ = "gdp_series_summaries"
-    __table_args__ = (UniqueConstraint("ingestion_run_id", "series_reference", name="uq_gdp_series_summaries_run_series"),)
+    __table_args__ = (
+        UniqueConstraint("ingestion_run_id", "series_reference", name="uq_gdp_series_summaries_run_series"),
+        Index("ix_gdp_series_summaries_run_id", "ingestion_run_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     ingestion_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)

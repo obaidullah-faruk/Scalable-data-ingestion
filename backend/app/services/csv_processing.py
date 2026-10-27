@@ -1,20 +1,19 @@
 """Streaming CSV parsing and idempotent result persistence for ingestion tasks."""
 
 import csv
+import io
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
-import io
-import re
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import GdpObservation, GdpSeriesSummary, RunValidationProfile
-
 
 CSV_COLUMNS = (
     "Series_reference",

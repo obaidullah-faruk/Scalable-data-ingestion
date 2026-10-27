@@ -1,0 +1,56 @@
+name: Promote
+
+# A version tag promotes the images that main already built for that commit. Nothing is rebuilt,
+# so prod runs exactly what dev ran.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  DOCKERHUB_USERNAME: faruk75
+
+jobs:
+  open-prod-pr:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          client-id: ${{ vars.GITOPS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          repositories: Scalable-Data-Ingestion-gitops
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/Scalable-Data-Ingestion-gitops
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Set the tag and digest of each image
+        run: |
+          for component in backend frontend; do
+            image="docker.io/$DOCKERHUB_USERNAME/ingestion-$component"
+            # Fails if main never built this commit.
+            digest="$(docker buildx imagetools inspect "$image:$GITHUB_SHA" --format '{{.Manifest.Digest}}')"
+            IMAGE="$image" TAG="$GITHUB_SHA" DIGEST="$digest" yq -i \
+              '(.images[] | select(.name == strenv(IMAGE))) |= (.newTag = strenv(TAG) | .digest = strenv(DIGEST))' \
+              apps/ingestion/overlays/prod/kustomization.yaml
+          done
+      - name: Open the pull request as the app
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          user_id="$(gh api "/users/$APP_SLUG%5Bbot%5D" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          branch="promote/$VERSION"
+          git switch --create "$branch"
+          git commit --all --message "Deploy $VERSION to prod"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "Deploy $VERSION to prod" \
+            --body "Promotes the images of $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA, the commit tagged $VERSION. Dev runs the same digests."

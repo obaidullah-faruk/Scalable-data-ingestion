@@ -5,7 +5,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import Base, IngestionRun, RunStatus, RunTask, RunTaskStatus, RunTaskType
+from app.models import (
+    Base,
+    IngestionRun,
+    RunStatus,
+    RunTask,
+    RunTaskStatus,
+    RunTaskType,
+)
 from app.services.run_state import derive_run_state
 
 

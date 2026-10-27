@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 
 from app.models.ingestion import IngestionRun, RunStatus, RunTask, RunTaskStatus
 
-
 TERMINAL_TASK_STATUSES = {RunTaskStatus.SUCCEEDED, RunTaskStatus.FAILED}
 
 

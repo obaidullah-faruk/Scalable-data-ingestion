@@ -80,6 +80,10 @@ The api reports its health on two endpoints:
 - `GET /health/live`: the process is up. It never checks dependencies.
 - `GET /health/ready`: PostgreSQL answers. Returns `503` when it does not.
 
+`GET /metrics` serves Prometheus metrics: request counts by route, method and status, and request latency. An SSE stream counts as one request; the time it stays open is not counted as latency.
+
+Every backend process logs one JSON object per line, at the level set by `LOG_LEVEL`. Lines about an ingestion run carry `run_id`, and lines about one of its tasks also carry `task_id` and `task_type`, so one upload can be followed from the api to the workers.
+
 ## Useful commands
 
 ```sh
@@ -87,6 +91,7 @@ The api reports its health on two endpoints:
 cd backend
 python3.14 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/ruff check .
 .venv/bin/pytest -q
 
 # Floci bucket, CORS, and multipart-completion smoke test (with Compose running)
@@ -96,11 +101,42 @@ set -a; source .env.example; set +a
 # Republish durable queued tasks left without a Celery ID (for example after an API stop)
 docker compose run --rm --no-deps api python -m app.scripts.reconcile_queued_tasks
 
-# Frontend tests and production build
+# Frontend lint, tests and production build
 cd ../frontend
+npm run lint
 CI=true npm test -- --runInBand
 npm run build
 ```
+
+## CI and releases
+
+Every pull request runs `.github/workflows/ci.yml`:
+
+| Job | Checks |
+|---|---|
+| backend | ruff, pytest, and `alembic upgrade head` plus `alembic check` against PostgreSQL |
+| frontend | ESLint, tests and a production build |
+| hadolint, actionlint | Dockerfiles and workflows |
+| image | Builds each image for arm64 and fails on fixable HIGH or CRITICAL vulnerabilities |
+| ci-passed | Passes only when every job above passed. Branch rules require this one check. |
+
+A vulnerability that doesn't affect the app can be accepted in `.trivyignore`, with the reason next to it.
+
+Delivery goes through the [gitops repo](https://github.com/obaidullah-faruk/Scalable-Data-Ingestion-gitops). CI never gets cluster credentials; ArgoCD pulls from Git.
+
+1. **Merge to `main`:** `.github/workflows/release.yml` builds both images for arm64, pushes them to Docker Hub tagged with the commit SHA, and sets their tag and digest in the gitops repo's dev overlay. ArgoCD deploys dev.
+2. **Tag `vX.Y.Z` on a commit of `main`:** `.github/workflows/promote.yml` opens a pull request that sets the same digests in the prod overlay. Nothing is rebuilt. Prod changes once the owner approves and merges it.
+3. **Roll back:** revert the overlay commit in the gitops repo.
+
+The workflows write to the gitops repo as a GitHub App installed only there. They need:
+
+| Name | Kind | Value |
+|---|---|---|
+| `DOCKERHUB_TOKEN` | secret | Docker Hub access token with Read & Write access |
+| `GITOPS_APP_CLIENT_ID` | variable | the App's Client ID |
+| `GITOPS_APP_PRIVATE_KEY` | secret | a private key of the App |
+
+Third-party actions are pinned to a commit SHA, with the version in a comment.
 
 Database migrations run automatically before the API and worker start. After changing SQLAlchemy models, generate and apply a migration from `backend/`:
 

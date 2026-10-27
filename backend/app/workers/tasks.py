@@ -1,9 +1,11 @@
 """Celery implementations for the three independent CSV ingestion tasks."""
 
+import logging
+import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Callable
-import uuid
+from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 from celery import Task
@@ -32,6 +34,16 @@ from app.services.run_state import refresh_run_state
 from app.workers.celery_app import celery_app
 
 RETRIABLE_EXCEPTIONS = (BotoCoreError, ClientError, OSError, SQLAlchemyError)
+
+logger = logging.getLogger(__name__)
+
+
+def _log_context(task: RunTask) -> dict[str, str]:
+    return {
+        "run_id": str(task.ingestion_run_id),
+        "task_id": str(task.id),
+        "task_type": task.task_type.value,
+    }
 
 
 def _task_snapshot(run: IngestionRun, task: RunTask) -> dict[str, Any]:
@@ -92,6 +104,7 @@ def _start_task(
     task.started_at = task.started_at or datetime.now(UTC)
     task.error_details = None
     _commit_and_publish(session, task)
+    logger.info("Task started", extra=_log_context(task))
     return run, task
 
 
@@ -109,6 +122,7 @@ def checkpoint_task(
     task.progress_percent = max(task.progress_percent, min(99, progress_percent))
     task.status = RunTaskStatus.PROCESSING
     _commit_and_publish(session, task)
+    logger.debug("Checkpoint saved at %s rows", task.processed_rows, extra=_log_context(task))
 
 
 def _finish_task(session: Session, *, run_task_id: uuid.UUID, processed_rows: int) -> None:
@@ -121,6 +135,7 @@ def _finish_task(session: Session, *, run_task_id: uuid.UUID, processed_rows: in
     task.completed_at = datetime.now(UTC)
     task.error_details = None
     _commit_and_publish(session, task)
+    logger.info("Task succeeded after %s rows", task.processed_rows, extra=_log_context(task))
 
 
 def _mark_retry(
@@ -136,6 +151,9 @@ def _mark_retry(
     task.retry_count += 1
     task.error_details = {"code": "RETRYING", "message": str(exception)}
     _commit_and_publish(session, task)
+    logger.warning(
+        "Task will retry, attempt %s: %s", task.retry_count, exception, extra=_log_context(task)
+    )
 
 
 def _fail_task(session: Session, *, run_task_id: uuid.UUID, exception: Exception) -> None:
@@ -149,6 +167,7 @@ def _fail_task(session: Session, *, run_task_id: uuid.UUID, exception: Exception
         "message": str(exception),
     }
     _commit_and_publish(session, task)
+    logger.error("Task failed", exc_info=exception, extra=_log_context(task))
 
 
 def _checkpoint_due(processed_rows: int, checkpoint_rows: int) -> bool:

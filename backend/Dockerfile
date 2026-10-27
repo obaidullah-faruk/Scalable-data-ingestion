@@ -8,7 +8,9 @@ RUN useradd --system --uid 10001 --no-create-home app
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# pip is not needed at runtime, and the copies of libraries it vendors fail the image scan.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall --yes pip
 
 COPY alembic.ini ./
 COPY alembic ./alembic

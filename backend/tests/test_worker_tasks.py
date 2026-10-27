@@ -1,6 +1,6 @@
+import uuid
 from io import BytesIO
 from types import SimpleNamespace
-import uuid
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -18,14 +18,13 @@ from app.models import (
 )
 from app.workers import tasks
 
-
-CSV = """Series_reference,Period,Data_value,STATUS,UNITS,MAGNITUDE,Subject,Group,Series_title_1,Series_title_2,Series_title_3,Series_title_4,Series_title_5
+CSV = b"""Series_reference,Period,Data_value,STATUS,UNITS,MAGNITUDE,Subject,Group,Series_title_1,Series_title_2,Series_title_3,Series_title_4,Series_title_5
 A,1972.03,10,FINAL,Dollars,6,Subject,Group,Title,,,,
 A,1972.06,15,FINAL,Dollars,6,Subject,Group,Title,,,,
 B,1972.03,,FINAL,Index,0,Subject,Group,Title,,,,
 B,not-a-period,3,FINAL,Index,0,Subject,Group,Title,,,,
 C,1972.03,not-a-number,,,0,Subject,Group,Title,,,,
-""".encode()
+"""
 
 
 class FakeS3Client:

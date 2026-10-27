@@ -135,7 +135,7 @@ services:
 
   worker:
     <<: *backend
-    command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "--without-mingle", "--without-gossip"]
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--without-mingle", "--without-gossip"]
     depends_on: *backend-dependencies
     deploy:
       replicas: 2
